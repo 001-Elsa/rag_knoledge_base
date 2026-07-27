@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>知识库问答 · RAG</title>
+<link rel="stylesheet" href="/static/vendor/element-plus.css">
+<link rel="stylesheet" href="/static/vendor/element-plus-dark.css">
+<link rel="stylesheet" href="/static/vendor/hljs-github.min.css" id="hljs-light">
+<link rel="stylesheet" href="/static/vendor/hljs-github-dark.min.css" id="hljs-dark" disabled>
+<style>
+:root {
+  --brand: #4f6ef7;
+  --brand-2: #7c5cf0;
+  --bg: #f4f6fb;
+  --panel: #ffffff;
+  --border: #e8eaf2;
+  --text-1: #1f2333;
+  --text-2: #6b7280;
+  --bubble-user: linear-gradient(135deg, #4f6ef7, #7c5cf0);
+}
+html.dark {
+  --bg: #14161f;
+  --panel: #1c1f2b;
+  --border: #2b2f3f;
+  --text-1: #e5e7ef;
+  --text-2: #9ca3b8;
+}
+* { box-sizing: border-box; }
+body { margin: 0; font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif; background: var(--bg); color: var(--text-1); }
+#app { height: 100vh; }
+
+/* ---------- 登录页 ---------- */
+.auth-wrap { height: 100vh; display: flex; align-items: center; justify-content: center;
+  background: radial-gradient(1200px 600px at 20% 10%, rgba(79,110,247,.18), transparent),
+              radial-gradient(1000px 500px at 90% 90%, rgba(124,92,240,.15), transparent), var(--bg); }
+.auth-card { width: 380px; background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
+  padding: 36px; box-shadow: 0 12px 40px rgba(31,35,51,.10); }
+.auth-logo { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.logo-dot { width: 34px; height: 34px; border-radius: 10px; background: var(--bubble-user); display: flex;
+  align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 16px; }
+.auth-card h1 { font-size: 20px; margin: 0; }
+.auth-sub { color: var(--text-2); font-size: 13px; margin: 6px 0 22px; }
+
+/* ---------- 主布局 ---------- */
+.layout { display: flex; height: 100vh; }
+.nav { width: 220px; background: var(--panel); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; padding: 18px 14px; gap: 6px; }
+.nav-logo { display: flex; align-items: center; gap: 10px; padding: 4px 8px 18px; font-weight: 700; font-size: 15px; }
+.nav-item { display: flex; align-items: center; gap: 10px; padding: 11px 12px; border-radius: 10px;
+  cursor: pointer; color: var(--text-2); font-size: 14px; transition: all .15s; }
+.nav-item:hover { background: rgba(79,110,247,.08); color: var(--brand); }
+.nav-item.active { background: rgba(79,110,247,.12); color: var(--brand); font-weight: 600; }
+.nav-bottom { margin-top: auto; display: flex; flex-direction: column; gap: 8px; padding: 8px; }
+.nav-user { display: flex; align-items: center; gap: 8px; color: var(--text-2); font-size: 13px; }
+.content { flex: 1; display: flex; min-width: 0; }
+
+/* ---------- 对话页 ---------- */
+.conv-panel { width: 250px; border-right: 1px solid var(--border); background: var(--panel);
+  display: flex; flex-direction: column; padding: 14px; gap: 10px; }
+.conv-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+.conv-item { padding: 10px 12px; border-radius: 8px; font-size: 13px; cursor: pointer; color: var(--text-2);
+  display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+.conv-item:hover { background: rgba(79,110,247,.07); }
+.conv-item.active { background: rgba(79,110,247,.12); color: var(--brand); }
+.conv-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.chat-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.chat-scroll { flex: 1; overflow-y: auto; padding: 28px 8%; }
+.msg-row { display: flex; margin-bottom: 18px; }
+.msg-row.user { justify-content: flex-end; }
+.bubble { max-width: 82%; padding: 12px 16px; border-radius: 14px; font-size: 14px; line-height: 1.75; }
+.bubble.user { background: var(--bubble-user); color: #fff; white-space: pre-wrap; word-break: break-word; }
+.bubble.assistant { background: var(--panel); border: 1px solid var(--border); }
+.bubble.assistant :first-child { margin-top: 0; }
+.bubble.assistant :last-child { margin-bottom: 0; }
+.bubble.assistant pre { background: rgba(127,127,127,.1); padding: 12px; border-radius: 8px; overflow-x: auto; }
+.bubble.assistant code { font-family: "JetBrains Mono", Consolas, monospace; font-size: 13px; }
+.bubble.assistant table { border-collapse: collapse; }
+.bubble.assistant td, .bubble.assistant th { border: 1px solid var(--border); padding: 6px 10px; }
+.meta-line { font-size: 12px; color: var(--text-2); margin: 6px 2px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.src-box { margin-top: 10px; border-top: 1px dashed var(--border); padding-top: 8px; }
+.src-item { font-size: 12px; color: var(--text-2); padding: 6px 8px; border-radius: 6px; background: rgba(127,127,127,.06); margin-top: 6px; }
+.src-head { display: flex; justify-content: space-between; gap: 8px; color: var(--brand); font-weight: 600; }
+.sugg-row { display: flex; gap: 8px; flex-wrap: wrap; margin: 2px 0 16px; }
+.tool-timeline { border-left: 2px solid var(--brand); padding: 4px 0 4px 12px; margin-bottom: 8px;
+  background: rgba(79,110,247,.05); border-radius: 0 8px 8px 0; }
+.tool-line { font-size: 12.5px; color: var(--text-2); padding: 3px 0; }
+.tool-line b { color: var(--brand); }
+.input-bar { padding: 14px 8% 20px; background: var(--panel); border-top: 1px solid var(--border); }
+.input-inner { display: flex; gap: 10px; align-items: flex-end; }
+.hint { font-size: 12px; color: var(--text-2); margin-top: 8px; }
+.empty-chat { text-align: center; color: var(--text-2); margin-top: 14vh; }
+.empty-chat .big { font-size: 42px; }
+
+/* ---------- 知识库页 / 统计页 ---------- */
+.page { flex: 1; overflow-y: auto; padding: 28px 32px; }
+.page-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+.page-head h2 { margin: 0; font-size: 20px; }
+.kb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; margin-bottom: 26px; }
+.kb-card { background: var(--panel); border: 1.5px solid var(--border); border-radius: 12px; padding: 16px;
+  cursor: pointer; transition: all .15s; }
+.kb-card:hover { border-color: var(--brand); transform: translateY(-2px); }
+.kb-card.active { border-color: var(--brand); box-shadow: 0 4px 18px rgba(79,110,247,.15); }
+.kb-name { font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
+.kb-desc { font-size: 12px; color: var(--text-2); margin: 8px 0; min-height: 17px; }
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; margin-bottom: 22px; }
+.stat-card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
+.stat-num { font-size: 26px; font-weight: 700; margin-top: 6px; }
+.stat-label { font-size: 13px; color: var(--text-2); }
+.chart-box { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
+#usageChart { width: 100%; height: 360px; }
+.upload-block { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 18px; margin-bottom: 18px; }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ============ 登录 / 注册 ============ -->
+  <div v-if="!logged" class="auth-wrap">
+    <div class="auth-card">
+      <div class="auth-logo"><div class="logo-dot">知</div><h1>知识库问答</h1></div>
+      <div class="auth-sub">上传文档，让 AI 基于你的资料回答 —— 带引用、可溯源</div>
+      <el-tabs v-model="authTab">
+        <el-tab-pane label="登录" name="login"></el-tab-pane>
+        <el-tab-pane label="注册" name="register"></el-tab-pane>
+      </el-tabs>
+      <el-form @submit.prevent>
+        <el-form-item><el-input v-model="authForm.username" placeholder="用户名（至少 3 位）" size="large" /></el-form-item>
+        <el-form-item><el-input v-model="authForm.password" type="password" placeholder="密码（至少 6 位）" size="large" show-password @keyup.enter="doAuth" /></el-form-item>
+      </el-form>
+      <el-button type="primary" size="large" style="width:100%" :loading="authLoading" @click="doAuth">
+        {{ authTab === 'login' ? '登 录' : '注 册' }}
+      </el-button>
+    </div>
+  </div>
+
+  <!-- ============ 主界面 ============ -->
+  <div v-else class="layout">
+    <nav class="nav">
+      <div class="nav-logo"><div class="logo-dot">知</div>知识库问答</div>
+      <div class="nav-item" :class="{active: tab==='chat'}" @click="switchTab('chat')"><el-icon><ChatDotRound /></el-icon>对话</div>
+      <div class="nav-item" :class="{active: tab==='kb'}" @click="switchTab('kb')"><el-icon><Collection /></el-icon>知识库</div>
+      <div class="nav-item" :class="{active: tab==='stats'}" @click="switchTab('stats')"><el-icon><DataAnalysis /></el-icon>用量统计</div>
+      <div class="nav-bottom">
+        <el-switch v-model="dark" active-text="深色" inactive-text="浅色" @change="applyTheme" />
+        <div class="nav-user">
+          <el-icon><User /></el-icon>{{ username }}
+          <el-button link type="danger" size="small" @click="logout">退出</el-button>
+        </div>
+      </div>
+    </nav>
+
+    <div class="content">
+
+      <!-- ======== 对话 ======== -->
+      <template v-if="tab==='chat'">
+        <div class="conv-panel">
+          <el-button type="primary" plain @click="newChat"><el-icon><Plus /></el-icon>&nbsp;新对话</el-button>
+          <el-select v-model="chatKb" placeholder="检索范围" size="small">
+            <el-option :value="''" label="全部知识库" />
+            <el-option v-for="k in kbs" :key="k.id" :value="k.id" :label="k.name" />
+          </el-select>
+          <el-tooltip content="问答模式：改写→检索→生成的固定管道，快。Agent 模式：模型自主多次调用检索工具，适合对比类/复杂问题" placement="right">
+            <el-radio-group v-model="chatMode" size="small" style="display:flex">
+              <el-radio-button label="rag" style="flex:1">💬 问答</el-radio-button>
+              <el-radio-button label="agent" style="flex:1">🤖 Agent</el-radio-button>
+            </el-radio-group>
+          </el-tooltip>
+          <div class="conv-list">
+            <div v-for="c in conversations" :key="c.id" class="conv-item" :class="{active: c.id===conversationId}" @click="openConversation(c)">
+              <span class="conv-title">{{ c.title }}</span>
+              <el-icon style="flex-shrink:0" @click.stop="renameConversation(c)"><EditPen /></el-icon>
+              <el-icon style="flex-shrink:0" @click.stop="deleteConversation(c)"><Delete /></el-icon>
+            </div>
+          </div>
+        </div>
+
+        <div class="chat-main">
+          <div class="chat-scroll" ref="chatScroll">
+            <div v-if="!messages.length" class="empty-chat">
+              <div class="big">📚</div>
+              <p>{{ readyDocCount ? '问点什么吧，回答将基于你的文档并附引用来源' : '先到「知识库」上传文档，再回来提问' }}</p>
+            </div>
+            <template v-for="(m, i) in messages" :key="i">
+              <div class="msg-row" :class="m.role">
+                <div v-if="m.role==='user'" class="bubble user">{{ m.content }}</div>
+                <div v-else style="max-width:82%; min-width:0;">
+                  <div class="meta-line" v-if="m.rewrite || m.cached">
+                    <el-tag v-if="m.cached" size="small" type="success">⚡ 语义缓存命中（相似度 {{ m.cached.similarity }}）</el-tag>
+                    <el-tag v-if="m.rewrite" size="small" type="info">实际检索：{{ m.rewrite }}</el-tag>
+                  </div>
+                  <div v-if="m.tools && m.tools.length" class="tool-timeline">
+                    <div v-for="(t, k) in m.tools" :key="k" class="tool-line">
+                      <span v-if="t.kind==='call'">🔧 调用 <b>{{ t.name }}</b><template v-if="t.args && t.args.query">：「{{ t.args.query }}」</template></span>
+                      <span v-else>↳ {{ t.summary }}</span>
+                    </div>
+                  </div>
+                  <div class="bubble assistant">
+                    <span v-if="m.streaming && !m.content" style="color:var(--text-2)">思考中…</span>
+                    <div v-html="renderMd(m.content)"></div>
+                    <div v-if="m.sources && m.sources.length" class="src-box">
+                      <el-collapse>
+                        <el-collapse-item :title="'📎 引用来源（' + m.sources.length + ' 个片段）'">
+                          <div v-for="(s, j) in m.sources" :key="j" class="src-item">
+                            <div class="src-head">
+                              <span>[{{ j+1 }}] {{ s.filename }}{{ s.page ? '（第 ' + s.page + ' 页）' : '（第 ' + (s.seq+1) + ' 段）' }}</span>
+                              <span>score {{ s.score }}</span>
+                            </div>
+                            <div style="margin-top:4px">{{ s.content.slice(0, 260) }}{{ s.content.length > 260 ? '…' : '' }}</div>
+                          </div>
+                        </el-collapse-item>
+                      </el-collapse>
+                    </div>
+                  </div>
+                  <div class="meta-line" v-if="m.usage">
+                    <span v-if="!m.cached">⏱ 首字 {{ m.usage.first_token_ms }}ms / 总耗时 {{ (m.usage.total_ms/1000).toFixed(1) }}s</span>
+                    <span v-if="m.usage.completion_tokens">🔢 {{ m.usage.prompt_tokens }}+{{ m.usage.completion_tokens }} tokens</span>
+                    <el-button link size="small" @click="copyText(m.content)"><el-icon><CopyDocument /></el-icon>复制</el-button>
+                    <el-button v-if="i === messages.length - 1 && !streaming" link size="small" @click="regenerate(i)"><el-icon><Refresh /></el-icon>重新生成</el-button>
+                  </div>
+                </div>
+              </div>
+              <div v-if="m.suggestions && m.suggestions.length" class="sugg-row">
+                <el-tag v-for="q in m.suggestions" :key="q" style="cursor:pointer" round effect="plain" type="primary" @click="ask(q)">{{ q }}</el-tag>
+              </div>
+            </template>
+          </div>
+          <div class="input-bar">
+            <div class="input-inner">
+              <el-input v-model="draft" type="textarea" :autosize="{minRows:1, maxRows:5}" placeholder="输入问题，Enter 发送，Shift+Enter 换行"
+                        @keydown.enter.exact.prevent="ask()" :disabled="streaming" />
+              <el-button v-if="streaming" type="danger" size="large" @click="stopGeneration">■ 停止</el-button>
+              <el-button v-else type="primary" size="large" @click="ask()">发送</el-button>
+            </div>
+            <div class="hint">回答由 DeepSeek 基于知识库检索结果生成，标注 [n] 的内容可在引用来源中核对原文。</div>
+          </div>
+        </div>
+      </template>
+
+      <!-- ======== 知识库 ======== -->
+      <div v-else-if="tab==='kb'" class="page">
+        <div class="page-head">
+          <h2>知识库</h2>
+          <el-button type="primary" @click="kbDialog=true"><el-icon><Plus /></el-icon>&nbsp;新建知识库</el-button>
+        </div>
+        <div class="kb-grid">
+          <div v-for="k in kbs" :key="k.id" class="kb-card" :class="{active: k.id===currentKb}" @click="selectKb(k.id)">
+            <div class="kb-name">
+              <span>📁 {{ k.name }}</span>
+              <el-icon style="color:var(--text-2)" @click.stop="deleteKb(k)"><Delete /></el-icon>
+            </div>
+            <div class="kb-desc">{{ k.description || '暂无描述' }}</div>
+            <el-tag size="small" type="info">{{ k.doc_count }} 个文档</el-tag>
+          </div>
+        </div>
+
+        <template v-if="currentKb">
+          <div class="upload-block">
+            <el-upload drag multiple :show-file-list="false" :http-request="uploadFile" accept=".pdf,.docx,.md,.txt">
+              <el-icon style="font-size:40px;color:var(--brand)"><UploadFilled /></el-icon>
+              <div>拖拽文件到这里，或 <em style="color:var(--brand)">点击上传</em></div>
+              <div style="font-size:12px;color:var(--text-2);margin-top:6px">支持 PDF / Word / Markdown / TXT，单文件 ≤ 20MB，上传后自动解析入库</div>
+            </el-upload>
+          </div>
+          <el-table :data="docs" style="width:100%">
+            <el-table-column prop="filename" label="文件名" min-width="220" />
+            <el-table-column label="状态" width="130">
+              <template #default="{row}">
+                <el-tag :type="{ready:'success', processing:'warning', pending:'info', failed:'danger'}[row.status]" size="small">
+                  {{ {ready:'✓ 可检索', processing:'处理中', pending:'排队中', failed:'失败'}[row.status] }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="chunk_count" label="切片数" width="90" />
+            <el-table-column label="备注" min-width="160">
+              <template #default="{row}"><span style="color:var(--text-2);font-size:12px">{{ row.error || '—' }}</span></template>
+            </el-table-column>
+            <el-table-column label="操作" width="80">
+              <template #default="{row}"><el-button link type="danger" size="small" @click="deleteDoc(row)">删除</el-button></template>
+            </el-table-column>
+          </el-table>
+        </template>
+        <el-empty v-else description="创建一个知识库开始使用" />
+
+        <el-dialog v-model="kbDialog" title="新建知识库" width="420px">
+          <el-form label-width="70px">
+            <el-form-item label="名称"><el-input v-model="kbForm.name" placeholder="如：产品手册" /></el-form-item>
+            <el-form-item label="描述"><el-input v-model="kbForm.description" placeholder="选填" /></el-form-item>
+          </el-form>
+          <template #footer>
+            <el-button @click="kbDialog=false">取消</el-button>
+            <el-button type="primary" @click="createKb">创建</el-button>
+          </template>
+        </el-dialog>
+      </div>
+
+      <!-- ======== 统计 ======== -->
+      <div v-else class="page">
+        <div class="page-head"><h2>用量统计</h2>
+          <el-button @click="loadStats" :loading="statsLoading"><el-icon><Refresh /></el-icon>&nbsp;刷新</el-button>
+        </div>
+        <div class="stat-grid" v-if="overview">
+          <div class="stat-card"><div class="stat-label">知识库 / 文档</div><div class="stat-num">{{ overview.kb_count }} / {{ overview.doc_count }}</div></div>
+          <div class="stat-card"><div class="stat-label">向量切片</div><div class="stat-num">{{ fmt(overview.chunk_count) }}</div></div>
+          <div class="stat-card"><div class="stat-label">累计提问</div><div class="stat-num">{{ fmt(overview.question_count) }}</div></div>
+          <div class="stat-card"><div class="stat-label">Token 消耗（入/出）</div><div class="stat-num" style="font-size:20px">{{ fmt(overview.prompt_tokens) }} / {{ fmt(overview.completion_tokens) }}</div></div>
+          <div class="stat-card"><div class="stat-label">平均首字延迟</div><div class="stat-num">{{ overview.avg_first_token_ms }}<span style="font-size:14px">ms</span></div></div>
+        </div>
+        <div class="chart-box">
+          <div style="font-weight:600;margin-bottom:10px">近 14 天提问与 Token 消耗</div>
+          <div id="usageChart"></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script src="/static/vendor/vue.global.prod.js"></script>
+<script src="/static/vendor/element-plus.full.min.js"></script>
+<script src="/static/vendor/element-plus-icons.iife.min.js"></script>
+<script src="/static/vendor/marked.min.js"></script>
+<script src="/static/vendor/purify.min.js"></script>
+<script src="/static/vendor/highlight.min.js"></script>
+<script src="/static/vendor/echarts.min.js"></script>
+<script>
+const { createApp } = Vue;
+
+// Markdown 渲染：marked 转 HTML → hljs 代码高亮 → DOMPurify 防 XSS
+marked.setOptions({
+  highlight: (code, lang) => {
+    try { return lang && hljs.getLanguage(lang) ? hljs.highlight(code, { language: lang }).value : hljs.highlightAuto(code).value; }
+    catch { return code; }
+  }
+});
+
+const app = createApp({
+  data() {
+    return {
+      // 认证
+      logged: false, authTab: 'login', authForm: { username: '', password: '' }, authLoading: false,
+      username: localStorage.getItem('rag_username') || '',
+      // 布局
+      tab: 'chat', dark: localStorage.getItem('rag_dark') === '1',
+      // 知识库
+      kbs: [], currentKb: '', docs: [], kbDialog: false, kbForm: { name: '', description: '' },
+      // 对话
+      conversations: [], conversationId: null, chatKb: '', chatMode: 'rag',
+      messages: [], draft: '', streaming: false, abortCtrl: null,
+      // 统计
+      overview: null, daily: [], statsLoading: false, chart: null,
+      ws: null,
+    };
+  },
+  computed: {
+    readyDocCount() { return this.docs.filter(d => d.status === 'ready').length || this.kbs.reduce((s, k) => s + k.doc_count, 0); },
+  },
+  mounted() {
+    this.applyTheme();
+    if (localStorage.getItem('rag_access')) { this.logged = true; this.bootstrap(); }
+  },
+  methods: {
+    fmt(n) { return n >= 10000 ? (n / 10000).toFixed(1) + 'w' : String(n); },
+    renderMd(text) { return DOMPurify.sanitize(marked.parse(text || '')); },
+    copyText(t) { navigator.clipboard.writeText(t); ElementPlus.ElMessage.success('已复制'); },
+    applyTheme() {
+      document.documentElement.classList.toggle('dark', this.dark);
+      document.getElementById('hljs-light').disabled = this.dark;
+      document.getElementById('hljs-dark').disabled = !this.dark;
+      localStorage.setItem('rag_dark', this.dark ? '1' : '0');
+      if (this.tab === 'stats') this.$nextTick(() => this.renderChart());
+    },
+
+    // ---------- 请求封装：401 时自动用 Refresh Token 换新并重试一次 ----------
+    async api(path, options = {}, retry = true) {
+      const headers = { ...(options.headers || {}) };
+      const access = localStorage.getItem('rag_access');
+      if (access) headers['Authorization'] = 'Bearer ' + access;
+      if (options.json) { headers['Content-Type'] = 'application/json'; options.body = JSON.stringify(options.json); }
+      const res = await fetch(path, { ...options, headers });
+      if (res.status === 401 && retry && await this.tryRefresh()) return this.api(path, options, false);
+      return res;
+    },
+    async tryRefresh() {
+      const refresh = localStorage.getItem('rag_refresh');
+      if (!refresh) { this.forceLogout(); return false; }
+      const res = await fetch('/api/auth/refresh', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refresh }),
+      });
+      if (!res.ok) { this.forceLogout(); return false; }
+      const data = await res.json();
+      localStorage.setItem('rag_access', data.access_token);
+      localStorage.setItem('rag_refresh', data.refresh_token);
+      this.connectWs();
+      return true;
+    },
+    forceLogout() {
+      localStorage.removeItem('rag_access'); localStorage.removeItem('rag_refresh');
+      this.logged = false;
+      if (this.ws) { this.ws.onclose = null; this.ws.close(); this.ws = null; }
+    },
+
+    // ---------- 认证 ----------
+    async doAuth() {
+      this.authLoading = true;
+      try {
+        const res = await fetch('/api/auth/' + this.authTab, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(this.authForm),
+        });
+        const data = await res.json();
+        if (!res.ok) return ElementPlus.ElMessage.error(data.detail || '操作失败');
+        localStorage.setItem('rag_access', data.access_token);
+        localStorage.setItem('rag_refresh', data.refresh_token);
+        localStorage.setItem('rag_username', this.authForm.username);
+        this.username = this.authForm.username;
+        this.logged = true;
+        this.bootstrap();
+      } finally { this.authLoading = false; }
+    },
+    async logout() {
+      const refresh = localStorage.getItem('rag_refresh');
+      if (refresh) await fetch('/api/auth/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: refresh }) });
+      this.forceLogout();
+    },
+    async bootstrap() {
+      const me = await this.api('/api/auth/me');
+      if (me.ok) { const u = await me.json(); this.username = u.username; localStorage.setItem('rag_username', u.username); }
+      await this.loadKbs();
+      await this.loadConversations();
+      this.connectWs();
+    },
+
+    // ---------- WebSocket：文档处理状态实时推送 ----------
+    connectWs() {
+      if (this.ws) { this.ws.onclose = null; this.ws.close(); }
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      this.ws = new WebSocket(`${proto}://${location.host}/api/ws?token=${localStorage.getItem('rag_access')}`);
+      this.ws.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+        if (msg.type !== 'document') return;
+        const doc = this.docs.find(d => d.id === msg.document_id);
+        if (doc) { doc.status = msg.status; doc.chunk_count = msg.chunk_count; doc.error = msg.error; }
+        if (msg.status === 'ready') {
+          ElementPlus.ElNotification.success({ title: '文档已就绪', message: `${msg.filename}（${msg.chunk_count} 个切片）` });
+          this.loadKbs();
+        } else if (msg.status === 'failed') {
+          ElementPlus.ElNotification.error({ title: '文档处理失败', message: `${msg.filename}：${msg.error || '未知错误'}` });
+        }
+      };
+      this.ws.onclose = () => { if (this.logged) setTimeout(() => this.connectWs(), 5000); };
+    },
+
+    // ---------- 知识库 ----------
+    async loadKbs() {
+      const res = await this.api('/api/kbs');
+      if (!res.ok) return;
+      this.kbs = await res.json();
+      if (!this.currentKb && this.kbs.length) this.selectKb(this.kbs[0].id);
+    },
+    async createKb() {
+      if (!this.kbForm.name.trim()) return ElementPlus.ElMessage.warning('请填写名称');
+      const res = await this.api('/api/kbs', { method: 'POST', json: this.kbForm });
+      const data = await res.json();
+      if (!res.ok) return ElementPlus.ElMessage.error(data.detail || '创建失败');
+      this.kbDialog = false; this.kbForm = { name: '', description: '' };
+      await this.loadKbs(); this.selectKb(data.id);
+    },
+    async deleteKb(k) {
+      await ElementPlus.ElMessageBox.confirm(`删除知识库「${k.name}」及其全部文档与向量数据？`, '确认删除', { type: 'warning' });
+      await this.api('/api/kbs/' + k.id, { method: 'DELETE' });
+      if (this.currentKb === k.id) { this.currentKb = ''; this.docs = []; }
+      this.loadKbs();
+    },
+    async selectKb(id) {
+      this.currentKb = id;
+      const res = await this.api('/api/documents?kb_id=' + id);
+      if (res.ok) this.docs = await res.json();
+    },
+    async uploadFile({ file }) {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('kb_id', this.currentKb);
+      const res = await this.api('/api/documents', { method: 'POST', body: form });
+      const data = await res.json();
+      if (!res.ok) return ElementPlus.ElMessage.error(data.detail || '上传失败');
+      ElementPlus.ElMessage.success('已提交处理：' + file.name);
+      this.docs.unshift(data);
+    },
+    async deleteDoc(row) {
+      await ElementPlus.ElMessageBox.confirm(`删除文档「${row.filename}」？`, '确认删除', { type: 'warning' });
+      await this.api('/api/documents/' + row.id, { method: 'DELETE' });
+      this.docs = this.docs.filter(d => d.id !== row.id);
+      this.loadKbs();
+    },
+
+    // ---------- 对话 ----------
+    switchTab(t) { this.tab = t; if (t === 'stats') this.loadStats(); },
+    newChat() { this.conversationId = null; this.messages = []; },
+    async loadConversations() {
+      const res = await this.api('/api/chat/conversations');
+      if (res.ok) this.conversations = await res.json();
+    },
+    async openConversation(c) {
+      this.conversationId = c.id;
+      this.chatKb = c.kb_id || '';
+      const res = await this.api(`/api/chat/conversations/${c.id}/messages`);
+      if (!res.ok) return;
+      const rows = await res.json();
+      this.messages = rows.map(r => ({
+        role: r.role, content: r.content,
+        sources: r.sources ? JSON.parse(r.sources) : [],
+        streaming: false,
+      }));
+      this.scrollBottom();
+    },
+    async deleteConversation(c) {
+      await ElementPlus.ElMessageBox.confirm(`删除对话「${c.title}」？`, '确认删除', { type: 'warning' });
+      await this.api('/api/chat/conversations/' + c.id, { method: 'DELETE' });
+      if (this.conversationId === c.id) this.newChat();
+      this.loadConversations();
+    },
+    async renameConversation(c) {
+      const { value } = await ElementPlus.ElMessageBox.prompt('新的对话标题', '重命名', { inputValue: c.title });
+      if (!value || !value.trim()) return;
+      const res = await this.api('/api/chat/conversations/' + c.id, { method: 'PATCH', json: { title: value.trim() } });
+      if (res.ok) this.loadConversations();
+    },
+    regenerate(i) {
+      // 找到该回答之前最近的用户提问，重新发送
+      for (let j = i - 1; j >= 0; j--) {
+        if (this.messages[j].role === 'user') { this.ask(this.messages[j].content); return; }
+      }
+    },
+    stopGeneration() {
+      if (this.abortCtrl) this.abortCtrl.abort();
+    },
+    scrollBottom() {
+      this.$nextTick(() => { const el = this.$refs.chatScroll; if (el) el.scrollTop = el.scrollHeight; });
+    },
+    async ask(preset) {
+      const question = (preset || this.draft).trim();
+      if (!question || this.streaming) return;
+      this.draft = '';
+      this.streaming = true;
+      this.messages.push({ role: 'user', content: question });
+      const bot = Vue.reactive({ role: 'assistant', content: '', sources: [], suggestions: [], rewrite: null,
+                                 usage: null, cached: null, tools: [], streaming: true });
+      this.messages.push(bot);
+      this.scrollBottom();
+      this.abortCtrl = new AbortController();
+
+      try {
+        const res = await this.api('/api/chat', {
+          method: 'POST',
+          json: { question, conversation_id: this.conversationId, kb_id: this.chatKb || null, mode: this.chatMode },
+          signal: this.abortCtrl.signal,
+        });
+        if (!res.ok) { bot.content = '请求失败：' + ((await res.json()).detail || res.status); return; }
+
+        // 手动解析 SSE（POST 流式响应不能用 EventSource）
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const events = buffer.split('\n\n');
+          buffer = events.pop();  // 末段可能被 TCP 分包截断，留到下一轮
+          for (const raw of events) {
+            const ev = raw.match(/^event: (.+)$/m);
+            const dt = raw.match(/^data: (.+)$/m);
+            if (!ev || !dt) continue;
+            const data = JSON.parse(dt[1]);
+            switch (ev[1]) {
+              case 'cached': bot.cached = data; break;
+              case 'rewrite': bot.rewrite = data.query; break;
+              case 'tool_call': bot.tools.push({ kind: 'call', name: data.name, args: data.args }); this.scrollBottom(); break;
+              case 'tool_result': bot.tools.push({ kind: 'result', name: data.name, summary: data.summary }); this.scrollBottom(); break;
+              case 'sources': bot.sources = data; break;
+              case 'delta': bot.content += data.text; this.scrollBottom(); break;
+              case 'done':
+                this.conversationId = data.conversation_id;
+                bot.usage = data.usage;
+                bot.streaming = false;
+                this.loadConversations();
+                break;
+              case 'suggestions': bot.suggestions = data.questions; this.scrollBottom(); break;
+              case 'error': bot.content += '\n\n> ⚠️ ' + data.message; break;
+            }
+          }
+        }
+      } catch (err) {
+        if (err.name === 'AbortError') bot.content += '\n\n> ⏹ 已停止生成';
+        else bot.content += '\n\n> ⚠️ 网络错误：' + err.message;
+      } finally {
+        bot.streaming = false;
+        this.streaming = false;
+        this.abortCtrl = null;
+        this.scrollBottom();
+      }
+    },
+
+    // ---------- 统计 ----------
+    async loadStats() {
+      this.statsLoading = true;
+      try {
+        const [o, d] = await Promise.all([this.api('/api/stats/overview'), this.api('/api/stats/daily?days=14')]);
+        if (o.ok) this.overview = await o.json();
+        if (d.ok) this.daily = await d.json();
+        this.$nextTick(() => this.renderChart());
+      } finally { this.statsLoading = false; }
+    },
+    renderChart() {
+      const el = document.getElementById('usageChart');
+      if (!el) return;
+      if (this.chart) { this.chart.dispose(); }
+      this.chart = echarts.init(el, this.dark ? 'dark' : null);
+      this.chart.setOption({
+        backgroundColor: 'transparent',
+        tooltip: { trigger: 'axis' },
+        legend: { data: ['提问次数', '输入 tokens', '输出 tokens'] },
+        grid: { left: 50, right: 60, top: 40, bottom: 30 },
+        xAxis: { type: 'category', data: this.daily.map(d => d.date.slice(5)) },
+        yAxis: [
+          { type: 'value', name: '次数', minInterval: 1 },
+          { type: 'value', name: 'tokens' },
+        ],
+        series: [
+          { name: '提问次数', type: 'bar', data: this.daily.map(d => d.questions), itemStyle: { color: '#4f6ef7', borderRadius: [4, 4, 0, 0] }, barMaxWidth: 26 },
+          { name: '输入 tokens', type: 'line', yAxisIndex: 1, smooth: true, data: this.daily.map(d => d.prompt_tokens), itemStyle: { color: '#7c5cf0' } },
+          { name: '输出 tokens', type: 'line', yAxisIndex: 1, smooth: true, data: this.daily.map(d => d.completion_tokens), itemStyle: { color: '#22c1a3' } },
+        ],
+      });
+    },
+  },
+});
+
+app.use(ElementPlus);
+for (const [name, comp] of Object.entries(ElementPlusIconsVue)) app.component(name, comp);
+app.mount('#app');
+</script>
+</body>
+</html>

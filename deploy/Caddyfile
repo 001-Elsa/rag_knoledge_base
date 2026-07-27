@@ -1,0 +1,10 @@
+# Caddy 反向代理：填了真实域名（DOMAIN 环境变量）会自动申请并续期 HTTPS 证书。
+# 本地/无域名时 DOMAIN 默认 :80，纯 HTTP 反代。
+{$DOMAIN::80} {
+    encode gzip
+
+    # WebSocket 与 SSE 均由 reverse_proxy 原生支持
+    reverse_proxy api:8000 {
+        flush_interval -1   # SSE 流式输出不缓冲
+    }
+}

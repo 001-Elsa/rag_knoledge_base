@@ -1,0 +1,25 @@
+# CI 专用：单测与 lint 所需的最小依赖（不含 torch 等重依赖，模型相关代码全部懒加载）
+fastapi==0.115.6
+sqlalchemy==2.0.36
+psycopg[binary]==3.2.3
+pgvector==0.3.6
+redis==5.2.1
+celery==5.4.0
+pyjwt==2.10.1
+passlib==1.7.4
+bcrypt==4.0.1
+pydantic==2.10.4
+pydantic-settings==2.7.0
+openai==1.59.7
+pypdf==5.1.0
+python-docx==1.1.2
+jieba==0.42.1
+slowapi==0.1.9
+prometheus-client==0.21.1
+aiofiles==24.1.0
+python-multipart==0.0.20
+
+# 工具
+pytest==8.3.4
+httpx==0.28.1
+ruff==0.8.4

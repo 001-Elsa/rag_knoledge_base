@@ -1,0 +1,51 @@
+# Web 框架
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+aiofiles==24.1.0
+
+# 数据库（PostgreSQL + pgvector，psycopg3 同时支持同步/异步）
+sqlalchemy==2.0.36
+psycopg[binary]==3.2.3
+pgvector==0.3.6
+alembic==1.14.0
+
+# 缓存 / 消息队列
+redis==5.2.1
+celery==5.4.0
+
+# 认证
+pyjwt==2.10.1
+passlib==1.7.4
+bcrypt==4.0.1
+
+# 配置
+pydantic==2.10.4
+pydantic-settings==2.7.0
+
+# LLM 客户端（OpenAI 兼容协议，指向 DeepSeek）
+openai==1.59.7
+
+# 文档解析
+pypdf==5.1.0
+python-docx==1.1.2
+
+# 检索
+jieba==0.42.1
+rank-bm25==0.2.2
+
+# 本地 Embedding（bge-small-zh-v1.5，首次运行自动下载模型约 100MB）
+sentence-transformers==3.3.1
+
+# 限流
+slowapi==0.1.9
+
+# 可观测性
+prometheus-client==0.21.1
+
+# Celery 监控面板
+flower==2.0.1
+
+# 测试
+pytest==8.3.4
+httpx==0.28.1

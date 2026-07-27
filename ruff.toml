@@ -1,0 +1,12 @@
+line-length = 120
+target-version = "py311"
+
+[lint]
+# E/F: pycodestyle+pyflakes 基础错误；I: import 排序；UP: 现代语法建议
+select = ["E", "F", "I", "UP"]
+ignore = [
+    "E501",  # 行宽由 line-length 统一控制，中文注释常超
+]
+
+[lint.per-file-ignores]
+"migrations/*" = ["I"]
