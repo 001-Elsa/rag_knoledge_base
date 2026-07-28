@@ -1,10 +1,16 @@
 """应用入口：FastAPI 实例、路由注册、中间件、指标、健康检查。"""
+import asyncio
 import contextvars
 import json
 import logging
+import sys
 import time
 import uuid
 from contextlib import asynccontextmanager
+
+# Windows + psycopg 异步需要 SelectorEventLoop（默认 Proactor 不兼容）
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse
