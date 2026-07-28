@@ -7,6 +7,7 @@ from app.db import get_db
 from app.deps import get_current_user
 from app.models import Document, KnowledgeBase, User
 from app.schemas import KBCreateRequest, KBOut
+from app.services.resource_cleanup import delete_knowledge_base
 
 router = APIRouter(prefix="/api/kbs", tags=["知识库"])
 
@@ -49,8 +50,7 @@ async def delete_kb(kb_id: str, user: User = Depends(get_current_user), db: Asyn
     kb = (await db.execute(select(KnowledgeBase).where(KnowledgeBase.id == kb_id))).scalar_one_or_none()
     if kb is None or kb.owner_id != user.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "知识库不存在")
-    await db.delete(kb)
-    await db.commit()
+    await delete_knowledge_base(db, kb, user.id)
 
 
 async def get_owned_kb(db: AsyncSession, kb_id: str, owner_id: str) -> KnowledgeBase:

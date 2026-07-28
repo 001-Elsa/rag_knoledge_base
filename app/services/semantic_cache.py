@@ -25,6 +25,11 @@ def _key(user_id: str, kb_id: str | None) -> str:
     return f"{_PREFIX}{user_id}:{kb_id or 'all'}"
 
 
+def is_eligible(history: list[dict]) -> bool:
+    """Final-answer caching is safe only when no conversation context is present."""
+    return not history
+
+
 def cosine_similarity(a: list[float], b: list[float]) -> float:
     dot = sum(x * y for x, y in zip(a, b))
     norm_a = math.sqrt(sum(x * x for x in a))

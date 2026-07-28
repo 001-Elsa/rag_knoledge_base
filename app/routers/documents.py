@@ -14,8 +14,8 @@ from app.limiter import limiter
 from app.models import Document, User
 from app.routers.kb import get_owned_kb
 from app.schemas import DocumentOut
-from app.services import semantic_cache
 from app.services.parser import SUPPORTED_EXTENSIONS
+from app.services.resource_cleanup import delete_document as delete_document_resources
 from app.tasks.ingest import ingest_document
 
 router = APIRouter(prefix="/api/documents", tags=["文档"])
@@ -89,10 +89,7 @@ async def get_document(document_id: str, user: User = Depends(get_current_user),
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_document(document_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     doc = await _owned_document(db, document_id, user.id)
-    Path(doc.filepath).unlink(missing_ok=True)
-    await db.delete(doc)  # chunks 级联删除
-    await db.commit()
-    await semantic_cache.invalidate_user(user.id)  # 内容变化，语义缓存失效
+    await delete_document_resources(db, doc, user.id)
 
 
 async def _owned_document(db: AsyncSession, document_id: str, owner_id: str) -> Document:

@@ -2,7 +2,7 @@
 import time
 
 from app.services.llm import CircuitBreaker
-from app.services.semantic_cache import cosine_similarity
+from app.services.semantic_cache import cosine_similarity, is_eligible
 
 
 def test_cosine_identical_vectors():
@@ -16,6 +16,11 @@ def test_cosine_orthogonal_vectors():
 
 def test_cosine_zero_vector():
     assert cosine_similarity([0, 0], [1, 1]) == 0.0
+
+
+def test_semantic_cache_only_accepts_context_free_questions():
+    assert is_eligible([])
+    assert not is_eligible([{"role": "user", "content": "产品 A"}])
 
 
 def test_breaker_opens_after_threshold():

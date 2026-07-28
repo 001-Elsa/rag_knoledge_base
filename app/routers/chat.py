@@ -125,7 +125,9 @@ async def chat(
     query_vec = await asyncio.to_thread(embed_query, search_query)
 
     # 3. 语义缓存：相似问题直接秒回，跳过检索与生成
-    cache_hit = await semantic_cache.lookup(user.id, body.kb_id, query_vec)
+    cache_hit = None
+    if semantic_cache.is_eligible(history):
+        cache_hit = await semantic_cache.lookup(user.id, body.kb_id, query_vec)
     if cache_hit is not None:
         async def cached_stream():
             QA_TOTAL.inc()
@@ -178,7 +180,8 @@ async def chat(
         total_ms = int((time.perf_counter() - t_start) * 1000)
         await _persist_round(conv_id, user.id, body.question, answer, sources,
                              usage, first_token_ms, total_ms)
-        await semantic_cache.store(user.id, body.kb_id, body.question, query_vec, answer, sources)
+        if semantic_cache.is_eligible(history):
+            await semantic_cache.store(user.id, body.kb_id, body.question, query_vec, answer, sources)
 
         yield _sse("done", {"conversation_id": conv_id,
                             "usage": {**usage, "first_token_ms": first_token_ms, "total_ms": total_ms}})
