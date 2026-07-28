@@ -27,7 +27,7 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 
 def _create_token(user_id: str, token_type: str, lifetime: timedelta, jti: str | None = None) -> str:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)  # noqa: UP017 - keep Python 3.10 local compatibility
     payload = {
         "sub": user_id,
         "type": token_type,

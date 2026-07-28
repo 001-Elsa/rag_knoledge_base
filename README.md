@@ -1,6 +1,6 @@
 # RAG 知识库问答系统
 
-企业级 RAG（检索增强生成）知识库问答系统：RAG / Agent 双模式问答、多知识库管理、
+面向生产实践的 RAG（检索增强生成）知识库问答系统：RAG / Agent 双模式问答、多知识库管理、
 异步文档入库、混合检索、语义缓存、多轮查询改写、页码级引用、WebSocket 实时通知、
 评估闭环与用量统计看板。
 
@@ -24,7 +24,7 @@ flowchart LR
 - **双模式问答**：RAG 固定管道（改写→检索→生成，快）/ Agent 模式（Function Calling 多步工具循环，模型自主决定检索几次、用什么关键词，适合对比类复杂问题，工具调用过程前端实时可视化）
 - 混合检索：pgvector 向量召回（HNSW 索引）+ **PostgreSQL 全文检索关键词召回**（jieba 分词 → tsvector + GIN 倒排索引 + ts_rank）→ RRF 融合，支持多查询扩展与交叉编码器重排
 - **长对话滚动摘要**：旧轮次自动压缩成摘要，Prompt = 摘要 + 最近几轮，上下文成本不随轮数膨胀
-- **语义缓存**：相似问题（向量相似度）直接秒回，延迟从秒级降到毫秒级、token 零成本；知识库变更自动失效
+- **语义缓存**：无会话历史时，相似问题可直接复用最终答案；多轮问答始终结合当前上下文重新生成，知识库变更时缓存自动失效
 - 多轮查询改写："那第二条呢" 自动改写成独立完整问题再检索（前端展示改写结果）
 - 引用溯源：回答带 [1][2] 编号，PDF 精确到页码，点开即可核对原文片段
 - 推荐追问：回答完成后自动生成 3 个可继续提问的问题，一键追问
@@ -33,7 +33,7 @@ flowchart LR
 
 **后端工程**
 - 多知识库：文档分库管理，提问可限定检索范围，数据按用户严格隔离
-- 异步入库：上传 202 秒回，Celery worker 解析/切片/向量化，状态经 Redis 发布订阅 + WebSocket 实时推送
+- 异步入库：上传时计算 SHA-256 并拒绝同知识库重复内容；Celery worker 通过状态条件更新抢占任务，解析/切片/向量化后经 WebSocket 推送状态
 - 双 Token 认证：短效 Access + 长效 Refresh（Redis 白名单、GETDEL 原子轮换防重放、登出吊销）
 - **LLM 容错**：超时 + 有限重试（退避）+ 熔断器 + **备用模型自动切换**（主模型故障/熔断时切任意 OpenAI 兼容服务）；增强功能（改写/追问/缓存/摘要）全部静默降级，不影响核心链路
 - 可观测性：Prometheus /metrics（HTTP + 检索/LLM 首字延迟直方图）、**全链路请求 ID 日志**、健康检查探测 DB/Redis、token 用量落库与看板
@@ -115,20 +115,22 @@ celery -A app.tasks worker --loglevel=info --concurrency=1
 ## 测试、评估与压测
 
 ```bash
-pytest                                     # 单元测试（切片/RRF/JWT/Token 轮换/熔断器/语义缓存）
+pytest                                     # 单元测试
 ruff check app tests scripts               # 代码检查（CI 同款）
+# PostgreSQL/pgvector 和 Redis 已启动时运行真实依赖测试
+RUN_INTEGRATION=1 pytest tests/integration  # PowerShell: $env:RUN_INTEGRATION="1"; pytest tests/integration
 
 # --- 评估闭环（服务启动、文档入库后）---
 python scripts/gen_eval_set.py --samples 20                                  # ① 自动生成评估集
 python scripts/eval_retrieval.py --user U --password P --file eval_set.jsonl # ② 检索 Hit Rate@K / MRR
 python scripts/eval_answers.py  --user U --password P --file eval_set.jsonl  # ③ LLM 评审回答忠实度/相关性
 
-# --- 压测（拿真实 QPS/P95 数据）---
+# --- 压测（记录 QPS/P95 基线）---
 pip install locust
 locust -f scripts/loadtest.py --host http://localhost:8000   # 打开 localhost:8089 设置并发
 ```
 
-调整 `CHUNK_SIZE` / `RETRIEVAL_TOP_K` / `MULTI_QUERY_ENABLED` / `RERANK_ENABLED` 等参数后重跑评估，可量化对比检索效果。把项目打造成简历主打的完整操作（GitHub 摆法、简历模板、STAR 故事）见 [docs/求职包装指南.md](docs/求职包装指南.md)。
+调整 `CHUNK_SIZE` / `RETRIEVAL_TOP_K` / `MULTI_QUERY_ENABLED` / `RERANK_ENABLED` 等参数后重跑评估，用固定数据集对比检索质量、延迟与成本。仓库不提供未经运行验证的性能数字。
 
 ## 项目结构
 
@@ -165,9 +167,9 @@ rag-knowledge-base/
 ├── scripts/
 │   ├── download_vendor.py    # 前端依赖本地化下载
 │   └── eval_retrieval.py     # 检索质量评估（Hit Rate / MRR）
-├── docs/                     # 架构设计、面试要点、升级说明
+├── docs/                     # 架构设计、部署与升级说明
 ├── docker-compose.yml        # pgvector + Redis + API + Worker + Flower
 └── Dockerfile
 ```
 
-设计细节见 [docs/架构设计.md](docs/架构设计.md)，面试准备见 [docs/面试要点.md](docs/面试要点.md)，v2 变更见 [docs/升级说明.md](docs/升级说明.md)。
+设计细节见 [docs/架构设计.md](docs/架构设计.md)，版本变更见 [docs/升级说明.md](docs/升级说明.md)。

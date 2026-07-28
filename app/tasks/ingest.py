@@ -8,7 +8,7 @@
 import logging
 
 import jieba
-from sqlalchemy import func
+from sqlalchemy import func, update
 
 from app.config import settings
 from app.db import SyncSessionLocal
@@ -29,13 +29,22 @@ def _tokenize(text: str) -> str:
 @celery_app.task(name="ingest_document", bind=True, max_retries=2, default_retry_delay=10)
 def ingest_document(self, document_id: str) -> dict:
     with SyncSessionLocal() as db:
-        doc = db.get(Document, document_id)
-        if doc is None:
-            logger.warning("文档不存在，跳过: %s", document_id)
-            return {"ok": False, "reason": "not_found"}
-
-        doc.status = DocStatus.processing
+        claimed_id = db.execute(
+            update(Document)
+            .where(
+                Document.id == document_id,
+                Document.status.in_([DocStatus.pending, DocStatus.failed]),
+            )
+            .values(status=DocStatus.processing, error=None)
+            .returning(Document.id)
+        ).scalar_one_or_none()
         db.commit()
+        if claimed_id is None:
+            reason = "not_found" if db.get(Document, document_id) is None else "already_claimed"
+            logger.info("Skipping document ingestion (%s): %s", reason, document_id)
+            return {"ok": False, "reason": reason}
+
+        doc = db.get(Document, document_id)
         publish_sync(doc.owner_id, document_event(doc.id, "processing", filename=doc.filename))
 
         try:

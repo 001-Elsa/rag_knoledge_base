@@ -11,4 +11,7 @@ from app.config import settings
 limiter = Limiter(
     key_func=get_remote_address,
     storage_uri=settings.rate_limit_storage_url or None,
+    # Settings already loads .env as UTF-8. Avoid SlowAPI reading it again
+    # with the platform default encoding (which breaks on Windows locales).
+    config_filename="",
 )

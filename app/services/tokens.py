@@ -4,7 +4,7 @@
 - Redis 只存 jti → user_id，key 自带 TTL 与 token 同寿命；
 - 轮换用 GETDEL 原子取出并删除：旧 Refresh Token 一经使用立刻作废，
   被窃取的旧 token 无法二次使用（防重放）；
-- 登出 = 删除 jti。Access Token 只有 30 分钟寿命，不做黑名单（经典取舍，可在面试聊）。
+- 登出 = 删除 jti。Access Token 只有 30 分钟寿命，不做黑名单。
 """
 import uuid
 

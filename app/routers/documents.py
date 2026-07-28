@@ -1,10 +1,12 @@
 """文档管理接口：上传 / 列表 / 状态 / 删除。"""
+import hashlib
 import uuid
 from pathlib import Path
 
 import aiofiles
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -44,6 +46,7 @@ async def upload_document(
     # 流式落盘：分块读写，避免大文件一次性读进内存
     max_bytes = settings.max_upload_mb * 1024 * 1024
     written = 0
+    hasher = hashlib.sha256()
     async with aiofiles.open(saved_path, "wb") as out:
         while chunk := await file.read(1024 * 1024):
             written += len(chunk)
@@ -54,13 +57,37 @@ async def upload_document(
                     status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                     f"文件超过 {settings.max_upload_mb}MB 限制",
                 )
+            hasher.update(chunk)
             await out.write(chunk)
 
+    content_hash = hasher.hexdigest()
+    duplicate = (
+        await db.execute(
+            select(Document.id).where(
+                Document.owner_id == user.id,
+                Document.kb_id == kb_id,
+                Document.content_hash == content_hash,
+            )
+        )
+    ).scalar_one_or_none()
+    if duplicate is not None:
+        saved_path.unlink(missing_ok=True)
+        raise HTTPException(status.HTTP_409_CONFLICT, "该文件已存在于当前知识库")
+
     doc = Document(
-        owner_id=user.id, kb_id=kb_id, filename=file.filename or saved_path.name, filepath=str(saved_path)
+        owner_id=user.id,
+        kb_id=kb_id,
+        filename=file.filename or saved_path.name,
+        filepath=str(saved_path),
+        content_hash=content_hash,
     )
     db.add(doc)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        saved_path.unlink(missing_ok=True)
+        raise HTTPException(status.HTTP_409_CONFLICT, "该文件已存在于当前知识库") from None
     await db.refresh(doc)
 
     ingest_document.delay(doc.id)  # 投递异步任务

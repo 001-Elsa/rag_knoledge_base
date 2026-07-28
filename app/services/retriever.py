@@ -6,7 +6,7 @@
 - 关键词检索正好相反；
 - 用 RRF（Reciprocal Rank Fusion）融合两路排名，不需要调权重就有稳定提升。
 
-关键词路的实现演进（面试可讲）：
+关键词召回实现演进：
 - v1-v3 用 LIKE '%kw%'：无法走索引，全表顺序扫描，数据量大后是 O(n) 慢查询；
 - v4 起用 PostgreSQL 全文检索：入库时 jieba 分词写入 tsvector + GIN 倒排索引，
   查询用 to_tsquery（OR 连接）+ ts_rank 排序——倒排索引查询，数据量增长不慌。

@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, Enum, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import DateTime, Enum, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -17,7 +17,7 @@ def _uuid() -> str:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(timezone.utc)  # noqa: UP017 - keep Python 3.10 local compatibility
 
 
 class User(Base):
@@ -63,6 +63,7 @@ class Document(Base):
     kb_id: Mapped[str] = mapped_column(ForeignKey("knowledge_bases.id", ondelete="CASCADE"), index=True)
     filename: Mapped[str] = mapped_column(String(255))
     filepath: Mapped[str] = mapped_column(String(512))
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[DocStatus] = mapped_column(Enum(DocStatus), default=DocStatus.pending)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     chunk_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -70,6 +71,15 @@ class Document(Base):
 
     kb: Mapped["KnowledgeBase"] = relationship(back_populates="documents")
     chunks: Mapped[list["Chunk"]] = relationship(back_populates="document", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_id",
+            "kb_id",
+            "content_hash",
+            name="uq_documents_owner_kb_content_hash",
+        ),
+    )
 
 
 class Chunk(Base):
@@ -99,6 +109,7 @@ class Chunk(Base):
         ),
         # 全文检索倒排索引
         Index("ix_chunks_content_tokens", "content_tokens", postgresql_using="gin"),
+        UniqueConstraint("document_id", "seq", name="uq_chunks_document_seq"),
     )
 
 
