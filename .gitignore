@@ -7,3 +7,8 @@ uploads/*
 *.egg-info/
 .venv/
 venv/
+celerybeat-schedule*
+.coverage
+htmlcov/
+eval/reports/*.json
+!eval/reports/.gitkeep

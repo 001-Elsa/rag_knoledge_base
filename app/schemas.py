@@ -15,14 +15,24 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class PasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8, max_length=128)
+
+
 class TokenPairResponse(BaseModel):
     access_token: str
-    refresh_token: str
+    refresh_token: str | None = None
     token_type: str = "bearer"
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    refresh_token: str | None = None
+
+
+class WebSocketTicketResponse(BaseModel):
+    ticket: str
+    expires_in: int
 
 
 class MeResponse(BaseModel):
@@ -37,10 +47,12 @@ class MeResponse(BaseModel):
 class KBCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     description: str = Field(default="", max_length=255)
+    workspace_id: str | None = None
 
 
 class KBOut(BaseModel):
     id: str
+    workspace_id: str
     name: str
     description: str
     created_at: datetime
@@ -55,8 +67,74 @@ class DocumentOut(BaseModel):
     kb_id: str
     filename: str
     status: str
+    stage: str
     chunk_count: int
+    retry_count: int = 0
+    active_index_version: int | None = None
+    target_index_version: int | None = None
+    worker_id: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    heartbeat_at: datetime | None = None
     error: str | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ---- 企业租户与权限 ----
+class WorkspaceOut(BaseModel):
+    id: str
+    organization_id: str
+    name: str
+    role: str
+    created_at: datetime
+
+
+class OrganizationCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+
+
+class OrganizationOut(BaseModel):
+    id: str
+    name: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class WorkspaceCreateRequest(BaseModel):
+    organization_id: str
+    name: str = Field(min_length=1, max_length=128)
+
+
+class MemberCreateRequest(BaseModel):
+    username: str
+    role: str = Field(pattern="^(admin|editor|viewer|auditor)$")
+
+
+class MemberRoleUpdateRequest(BaseModel):
+    role: str = Field(pattern="^(admin|editor|viewer|auditor)$")
+
+
+class MemberOut(BaseModel):
+    user_id: str
+    username: str
+    role: str
+    created_at: datetime
+
+
+class AuditLogOut(BaseModel):
+    id: str
+    action: str
+    resource_type: str
+    resource_id: str | None
+    outcome: str
+    actor_user_id: str | None
+    request_id: str | None
+    trace_id: str | None
+    before: dict | None
+    after: dict | None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -68,6 +146,10 @@ class ChatRequest(BaseModel):
     conversation_id: str | None = None  # 为空则新建会话
     kb_id: str | None = None            # 为空则检索该用户全部文档
     mode: str = Field(default="rag", pattern="^(rag|agent)$")  # rag=固定管道 / agent=工具循环
+    retrieval_profile: str = Field(
+        default="hybrid",
+        pattern="^(vector|hybrid|hybrid_rerank|parent_child|multi_query)$",
+    )
 
 
 class ConversationRenameRequest(BaseModel):

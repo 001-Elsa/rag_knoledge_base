@@ -1,175 +1,201 @@
-# RAG 知识库问答系统
+# 企业知识库 RAG 平台
 
-面向生产实践的 RAG（检索增强生成）知识库问答系统：RAG / Agent 双模式问答、多知识库管理、
-异步文档入库、混合检索、语义缓存、多轮查询改写、页码级引用、WebSocket 实时通知、
-评估闭环与用量统计看板。
+面向后端工程实践的多租户知识库平台。项目重点不是继续堆叠 AI 名词，而是解决四个可验证问题：
 
-**技术栈**：FastAPI · PostgreSQL(pgvector) · Redis · Celery · Alembic · WebSocket · Prometheus · DeepSeek API（Function Calling）· 本地 bge Embedding · Vue 3 + Element Plus · ECharts · Docker Compose · GitHub Actions
+1. 数据库提交后，入库任务最终可达且重复投递不产生重复切片；
+2. 索引策略与 RAG 质量可以固定评估、消融比较和回归；
+3. Organization / Workspace / RBAC / PostgreSQL RLS 形成多租户纵深隔离；
+4. API、Celery、数据库、Redis、对象存储和 LLM 链路可追踪、可恢复、可审计。
+
+技术栈：FastAPI、PostgreSQL 16、pgvector、Redis、Celery、MinIO/S3、OpenTelemetry、
+Prometheus、Grafana、Tempo、DeepSeek/OpenAI-compatible API、Vue 3、Docker Compose。
+
+## 架构
 
 ```mermaid
 flowchart LR
-    B[浏览器 Vue3] -- HTTP/SSE/WS --> A[FastAPI API]
-    A -- Function Calling / 生成 --> D[DeepSeek API]
-    A -- 查询向量化 --> E[bge 本地模型]
-    A <--> P[(PostgreSQL + pgvector)]
-    A <--> R[(Redis 队列/缓存/发布订阅)]
-    R --> W[Celery Worker 解析→切片→向量化]
-    W --> P
-    W -. 状态发布 .-> R -. WebSocket 推送 .-> B
+    UI["Browser / Vue"] -->|"HTTP · SSE · WS ticket"| API["FastAPI"]
+    API -->|"object"| S3["MinIO / S3"]
+    API -->|"one transaction"| PG[("PostgreSQL + pgvector")]
+    PG --> OUTBOX["outbox_events"]
+    BEAT["Celery Beat"] --> DISPATCH["Outbox Dispatcher"]
+    DISPATCH --> OUTBOX
+    DISPATCH --> REDIS[("Redis Broker")]
+    REDIS --> WORKER["Celery Worker"]
+    WORKER -->|"parse · chunk · embed · index"| PG
+    WORKER --> S3
+    API -->|"hybrid retrieval"| PG
+    API --> LLM["LLM"]
+    API -. "OTLP" .-> OTEL["OTel Collector → Tempo"]
+    API -. "metrics" .-> PROM["Prometheus → Grafana"]
+    WORKER -. "metrics / OTLP" .-> PROM
 ```
 
-## 功能特性
+### 可靠入库与无停机重建
 
-**AI / RAG**
-- **双模式问答**：RAG 固定管道（改写→检索→生成，快）/ Agent 模式（Function Calling 多步工具循环，模型自主决定检索几次、用什么关键词，适合对比类复杂问题，工具调用过程前端实时可视化）
-- 混合检索：pgvector 向量召回（HNSW 索引）+ **PostgreSQL 全文检索关键词召回**（jieba 分词 → tsvector + GIN 倒排索引 + ts_rank）→ RRF 融合，支持多查询扩展与交叉编码器重排
-- **长对话滚动摘要**：旧轮次自动压缩成摘要，Prompt = 摘要 + 最近几轮，上下文成本不随轮数膨胀
-- **语义缓存**：无会话历史时，相似问题可直接复用最终答案；多轮问答始终结合当前上下文重新生成，知识库变更时缓存自动失效
-- 多轮查询改写："那第二条呢" 自动改写成独立完整问题再检索（前端展示改写结果）
-- 引用溯源：回答带 [1][2] 编号，PDF 精确到页码，点开即可核对原文片段
-- 推荐追问：回答完成后自动生成 3 个可继续提问的问题，一键追问
-- **评估闭环**：自动从文档生成评估集 → Hit Rate@K / MRR 检索评估 → LLM-as-judge 回答忠实度/相关性评分
-- 幻觉控制：System Prompt 强约束 + 低温度 + "知识库没有答案时明说"
+上传接口流式计算 SHA-256，校验扩展名、MIME、PDF/DOCX 文件头、文件大小和工作区配额。对象写入
+MinIO/S3 后，在一个数据库事务中同时写入 `documents`、`outbox_events` 和审计事件。Broker 故障不会
+让文档永久停在 pending；Dispatcher 按指数退避重试，超过上限进入可查询的 failed 状态。
 
-**后端工程**
-- 多知识库：文档分库管理，提问可限定检索范围，数据按用户严格隔离
-- 异步入库：上传时计算 SHA-256 并拒绝同知识库重复内容；Celery worker 通过状态条件更新抢占任务，解析/切片/向量化后经 WebSocket 推送状态
-- 双 Token 认证：短效 Access + 长效 Refresh（Redis 白名单、GETDEL 原子轮换防重放、登出吊销）
-- **LLM 容错**：超时 + 有限重试（退避）+ 熔断器 + **备用模型自动切换**（主模型故障/熔断时切任意 OpenAI 兼容服务）；增强功能（改写/追问/缓存/摘要）全部静默降级，不影响核心链路
-- 可观测性：Prometheus /metrics（HTTP + 检索/LLM 首字延迟直方图）、**全链路请求 ID 日志**、健康检查探测 DB/Redis、token 用量落库与看板
-- 工程化：Alembic 迁移、Redis 分布式限流、大文件流式上传校验、单元测试、**Locust 压测脚本**、Flower 队列监控、**GitHub Actions CI**（ruff + pytest）、MIT License
+文档状态机：
 
-**前端**
-- Vue 3 + Element Plus 单页应用（依赖全部本地化，不依赖外网 CDN）
-- 深色/浅色主题、Markdown 渲染 + 代码高亮（XSS 过滤）、会话历史恢复、拖拽上传
+```text
+uploaded → queued → parsing → chunking → embedding → indexing → ready
+                       ↘ retrying / failed / cancelled
+deleting → deleted
+```
 
-## 快速开始（推荐：Docker 一键启动）
+Worker 使用 `status + processing_token` 做 CAS 抢占，开启 `acks_late`、worker-lost 重投、软硬超时和
+有限退避重试。索引写入新的 `index_version`，新切片全部写入成功后才原子更新
+`active_index_version`；重建过程中检索继续读取旧版本。唯一约束为：
 
-前置条件：安装 [Docker Desktop](https://www.docker.com/products/docker-desktop/)。
+```text
+UNIQUE(document_id, seq, index_version)
+```
+
+定时对账任务负责恢复心跳过期的 Worker、扫描孤儿对象和清理明确指定的旧索引版本。
+
+### 可测量 RAG
+
+- pgvector HNSW 向量召回；
+- PostgreSQL `tsvector + GIN` 全文召回；
+- RRF 融合、可选 CrossEncoder Reranker；
+- Parent-Child Retrieval：小切片召回、父段落送入模型；
+- Multi-query、长对话查询改写；
+- 证据数量/分数门控，证据不足直接拒答；
+- 间接 Prompt Injection 模式检测和不可信文档边界；
+- 生成后引用编号、越界引用和未引用事实句检查。
+
+`ChatRequest.retrieval_profile` 可以选择：
+
+```text
+vector | hybrid | hybrid_rerank | parent_child | multi_query
+```
+
+[固定人工评估集](eval/golden_set.jsonl)覆盖事实、同义改写、编号、跨段对比、权限、无答案和恶意文档。
+评估脚本输出 Hit Rate@5、MRR、nDCG@5、无答案误答率和检索 P95；质量门禁比较当前报告与主分支实测
+基线。仓库不预填未经运行的 X/Y 指标。
+
+### 多租户、安全和审计
+
+```text
+Organization
+└── Workspace
+    ├── Membership (Owner / Admin / Editor / Viewer / Auditor)
+    └── Knowledge Base
+        └── Documents
+```
+
+API 层执行 RBAC；数据库层通过 `SET LOCAL app.user_id` 和 PostgreSQL RLS 再做一次行隔离。Compose
+为迁移、API 和 Worker 使用不同数据库角色：`rag_admin` 拥有 schema，`rag_app` 是受 RLS 约束的
+非 owner 角色，`rag_worker` 仅用于受信后台任务并具有 BYPASSRLS。
+
+审计日志记录 actor、workspace、action、resource、IP、request_id、trace_id 和变更前后字段。
+数据库触发器阻止普通 UPDATE/DELETE，业务接口只能追加。
+
+浏览器端：
+
+- Refresh Token：`HttpOnly + SameSite` Cookie；
+- Access Token：仅保存在 JavaScript 内存；
+- Refresh Token family：原子轮换、旧 Token 重放时吊销整个 family；
+- WebSocket：使用 Redis 中一次消费、默认 60 秒有效的 Ticket，不在 URL 中传 Access Token。
+
+Agent 工具均为只读；检索文档被明确标记为不可信数据。容器以 UID 10001 非 root 运行，PostgreSQL、
+Redis、Prometheus、Grafana 和 Flower 不对公网地址暴露；生产 Secret 没有代码内默认值。
+
+### 可观测与运维
+
+- HTTP request_id；
+- OpenTelemetry：FastAPI、SQLAlchemy、Redis、Celery，OTLP 可接 Collector + Tempo；
+- Prometheus：HTTP、检索、首 Token、缓存、Token、入库阶段、队列延迟、重试、Outbox 堆积；
+- Grafana 数据源：Prometheus + Tempo；
+- SLO 告警示例：5xx 比例、首 Token P95、Outbox 堆积、入库失败；
+- 健康检查仅返回依赖是否可用，不泄露原始异常。
+
+## 快速启动
+
+要求 Docker Desktop。先复制配置并替换所有 `change-me`：
 
 ```bash
-# 1. 进入项目目录
-cd rag-knowledge-base
-
-# 2. 配置 API Key：复制 .env.example 为 .env，填入 DeepSeek Key
-#    Key 在 https://platform.deepseek.com 注册后创建（充值 10 元够用很久）
-copy .env.example .env       # Windows（Mac/Linux 用 cp）
-# 用记事本打开 .env，把 LLM_API_KEY 改成你的真实 Key
-
-# 3. 一键启动（首次构建约 5-10 分钟：装依赖 + 下载前端库到本地）
+copy .env.example .env
 docker compose up -d --build
-
-# 4. 看日志确认启动成功
-docker compose logs -f api
+docker compose logs -f api worker beat
 ```
 
-- 应用入口：**http://localhost:8000**
-- 接口文档（Swagger）：http://localhost:8000/docs
-- Prometheus 指标：http://localhost:8000/metrics
-- Celery 监控面板（Flower）：http://localhost:5555
+应用：<http://localhost:8000>
 
-可选增强（compose profiles）：
+Swagger：<http://localhost:8000/docs>
+
+MinIO Console：<http://localhost:9001>
+
+监控与链路追踪：
 
 ```bash
-docker compose --profile monitoring up -d   # + Prometheus(9090) + Grafana(3000, admin/admin, 预置大盘)
-docker compose --profile edge up -d         # + Caddy 反代（配 DOMAIN 环境变量自动 HTTPS）
+# .env 中设置 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+docker compose --profile monitoring up -d
 ```
 
-部署到云服务器做成线上 Demo：见 [docs/生产部署.md](docs/生产部署.md)。
-
-> 首次上传文档时，worker 自动从 HuggingFace 镜像下载 bge-small-zh 向量模型（约 100MB），缓存在 Docker 卷中不重复下载。
-
-### 使用流程
-
-1. 注册账号 → 进入「知识库」页新建知识库 → 拖拽上传 PDF/Word/MD/TXT
-2. 右上角会实时弹出处理进度通知（WebSocket 推送，无需刷新）
-3. 到「对话」页选择检索范围提问，回答流式输出、附引用来源与推荐追问
-4. 「用量统计」页查看提问次数、token 消耗和延迟趋势
-
-### 常见问题
-
-| 问题 | 解决办法 |
-|---|---|
-| 上传后一直“处理中” | `docker compose logs -f worker`，首次是在下载向量模型，耐心等待 |
-| 回答报“生成失败” | 检查 .env 的 LLM_API_KEY 是否正确、DeepSeek 账户是否有余额 |
-| 前端库下载失败（构建时） | 重新执行 `docker compose build`（脚本会走 npmmirror 国内镜像并自动重试 unpkg） |
-| 端口被占用 | 修改 docker-compose.yml 端口映射，如 `"8001:8000"` |
-
-## 本地开发（不用 Docker）
-
-需要 Python 3.11+、PostgreSQL（带 pgvector 扩展）、Redis。
+Flower 属于运维 profile，且必须设置 Basic Auth：
 
 ```bash
-pip install -r requirements.txt
-python scripts/download_vendor.py          # 下载前端库到 app/static/vendor（一次即可）
-copy .env.example .env                     # 填 LLM_API_KEY，按需改 DATABASE_URL / REDIS_URL
-
-alembic upgrade head                       # 建表（或设 AUTO_CREATE_TABLES=true 跳过迁移）
-
-# 终端 1：API
-uvicorn app.main:app --reload
-# 终端 2：Celery worker（Windows 需加 --pool=solo）
-celery -A app.tasks worker --loglevel=info --concurrency=1
+docker compose --profile ops up -d flower
 ```
 
-## 测试、评估与压测
+已有 0003 数据库升级前，必须先停止写入并回填真实文件哈希：
 
 ```bash
-pytest                                     # 单元测试
-ruff check app tests scripts               # 代码检查（CI 同款）
-# PostgreSQL/pgvector 和 Redis 已启动时运行真实依赖测试
-RUN_INTEGRATION=1 pytest tests/integration  # PowerShell: $env:RUN_INTEGRATION="1"; pytest tests/integration
-
-# --- 评估闭环（服务启动、文档入库后）---
-python scripts/gen_eval_set.py --samples 20                                  # ① 自动生成评估集
-python scripts/eval_retrieval.py --user U --password P --file eval_set.jsonl # ② 检索 Hit Rate@K / MRR
-python scripts/eval_answers.py  --user U --password P --file eval_set.jsonl  # ③ LLM 评审回答忠实度/相关性
-
-# --- 压测（记录 QPS/P95 基线）---
-pip install locust
-locust -f scripts/loadtest.py --host http://localhost:8000   # 打开 localhost:8089 设置并发
+python scripts/backfill_document_hashes.py
+alembic upgrade head
 ```
 
-调整 `CHUNK_SIZE` / `RETRIEVAL_TOP_K` / `MULTI_QUERY_ENABLED` / `RERANK_ENABLED` 等参数后重跑评估，用固定数据集对比检索质量、延迟与成本。仓库不提供未经运行验证的性能数字。
+迁移不会为历史文件伪造哈希；发现 NULL 会直接失败并给出操作提示。
 
-## 项目结构
+## 测试与质量门禁
 
-```
-rag-knowledge-base/
-├── app/
-│   ├── main.py               # 入口：路由、指标中间件、健康检查、/metrics
-│   ├── config.py             # 全局配置（环境变量 / .env 覆盖）
-│   ├── db.py                 # 引擎：API 异步 / worker 同步
-│   ├── models.py             # ORM：用户/知识库/文档/切片(向量)/会话/消息/用量
-│   ├── security.py           # bcrypt + 双 Token JWT（类型校验）
-│   ├── metrics.py            # Prometheus 指标定义
-│   ├── limiter.py            # 限流（可切 Redis 存储）
-│   ├── routers/
-│   │   ├── auth.py           # 注册/登录/刷新/登出/me
-│   │   ├── kb.py             # 知识库 CRUD
-│   │   ├── documents.py      # 上传（流式落盘）/列表/删除
-│   │   ├── chat.py           # SSE 问答：改写→检索→流式生成→用量落库→推荐追问
-│   │   ├── stats.py          # 用量统计（总览 + 日趋势）
-│   │   └── ws.py             # WebSocket：Redis 订阅 → 浏览器推送
-│   ├── services/
-│   │   ├── parser.py         # PDF(带页码)/DOCX/MD/TXT 解析
-│   │   ├── chunker.py        # 递归切片（段落→句子→硬切，带重叠）
-│   │   ├── embedder.py       # 本地 bge 向量化（懒加载单例）
-│   │   ├── retriever.py      # 混合检索 + RRF + 可选重排（支持限定知识库）
-│   │   ├── llm.py            # DeepSeek：流式回答/查询改写/推荐追问
-│   │   ├── history.py        # 对话历史（PG + Redis Cache-Aside）
-│   │   ├── tokens.py         # Refresh Token 白名单（轮换/吊销）
-│   │   └── notify.py         # Redis 发布订阅（worker → API → WebSocket）
-│   ├── tasks/ingest.py       # 入库流水线（Celery，状态实时发布）
-│   └── static/               # Vue 3 前端（vendor 本地化）
-├── migrations/               # Alembic 迁移
-├── tests/                    # 单元测试
-├── scripts/
-│   ├── download_vendor.py    # 前端依赖本地化下载
-│   └── eval_retrieval.py     # 检索质量评估（Hit Rate / MRR）
-├── docs/                     # 架构设计、部署与升级说明
-├── docker-compose.yml        # pgvector + Redis + API + Worker + Flower
-└── Dockerfile
+```bash
+ruff check app tests scripts
+pytest -q
+
+# 使用真实 PostgreSQL/pgvector、Redis
+$env:RUN_INTEGRATION="1"
+$env:DATABASE_URL="postgresql+psycopg://..."
+$env:REDIS_URL="redis://..."
+$env:RLS_DATABASE_URL="postgresql+psycopg://非owner测试角色..."
+pytest tests/integration -q
 ```
 
-设计细节见 [docs/架构设计.md](docs/架构设计.md)，版本变更见 [docs/升级说明.md](docs/升级说明.md)。
+真实依赖测试覆盖：
+
+- SHA-256 唯一约束与对象/缓存清理；
+- RBAC 读写隔离和非 owner 数据库角色下的 RLS；
+- Broker 故障后 Outbox 重试、成功后不重复投递；
+- Celery 重复交付不产生重复切片；
+- 索引 v1 → v2 原子切换，旧版本在切换前后保持可查询；
+- Refresh Token 并发轮换。
+
+评估与门禁：
+
+```bash
+python scripts/eval_retrieval.py \
+  --user USER --password PASS \
+  --profile hybrid \
+  --out eval/reports/hybrid.json
+
+python scripts/check_quality_gate.py \
+  --baseline eval/baseline.json \
+  --current eval/reports/hybrid.json
+```
+
+CI 在真实 PostgreSQL/pgvector 和 Redis 上执行迁移、RLS/集成测试和固定评估集结构检查。独立安全工作流
+执行 CodeQL、Dependency Review、Trivy 文件/Secret/镜像扫描，并生成源码与镜像 SBOM。
+
+## 当前边界
+
+以下内容没有伪装成已完成：
+
+- `eval/golden_set.jsonl` 是可复现的最小夹具，不等于业务真实语料的 100～200 条人工集；
+- 引用验证器目前是确定性的编号与事实句检查，不是完整的 LLM Claim-Evidence 语义判定；
+- 仓库没有提交未经真实环境运行的性能数字、质量提升百分比或成本数字；
+- HTTPS Demo、业务数据压测报告和云环境故障演练结果需要部署后生成。
+
+详细设计见 [架构设计](docs/架构设计.md)，故障处置见 [运维 Runbook](docs/运维Runbook.md)。

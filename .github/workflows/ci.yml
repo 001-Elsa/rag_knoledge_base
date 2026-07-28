@@ -39,6 +39,8 @@ jobs:
       REDIS_URL: redis://localhost:6379/0
       AUTO_CREATE_TABLES: "false"
       RUN_INTEGRATION: "1"
+      RLS_DATABASE_URL: postgresql+psycopg://rag_app:rag_app_test@localhost:5432/ragdb
+      JWT_SECRET: ci-only-jwt-secret-with-at-least-32-characters
     steps:
       - uses: actions/checkout@v4
 
@@ -53,8 +55,25 @@ jobs:
       - name: Lint (ruff)
         run: ruff check app tests scripts
 
+      - name: Create non-owner RLS test role
+        env:
+          PGPASSWORD: ragpass
+        run: psql -h localhost -U rag -d ragdb -c "CREATE ROLE rag_app LOGIN PASSWORD 'rag_app_test'"
+
       - name: Apply database migrations
         run: alembic upgrade head
 
       - name: Test (pytest)
         run: pytest -q
+
+      - name: Validate reviewed golden-set schema
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          rows = [json.loads(x) for x in Path("eval/golden_set.jsonl").read_text().splitlines() if x.strip()]
+          assert len(rows) >= 10
+          required = {"id", "question", "reference_answer", "expected_documents", "expected_keywords", "answerable", "category"}
+          assert all(required <= row.keys() for row in rows)
+          assert len({row["id"] for row in rows}) == len(rows)
+          PY

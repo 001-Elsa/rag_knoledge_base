@@ -12,6 +12,22 @@ class Settings(BaseSettings):
     debug: bool = False
     upload_dir: str = "uploads"
     max_upload_mb: int = 20
+    max_document_pages: int = 500
+    max_uncompressed_mb: int = 100
+    workspace_storage_quota_mb: int = 10240
+    allowed_mime_types: str = (
+        "application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,"
+        "text/plain,text/markdown,text/x-markdown,application/octet-stream"
+    )
+
+    # ---- 对象存储（local / s3；MinIO 使用 S3 兼容协议）----
+    storage_backend: str = "local"
+    s3_endpoint_url: str = "http://localhost:9000"
+    s3_access_key: str = ""
+    s3_secret_key: str = ""
+    s3_bucket: str = "rag-documents"
+    s3_region: str = "us-east-1"
+    s3_secure: bool = False
 
     # ---- 数据库 ----
     database_url: str = "postgresql+psycopg://rag:ragpass@localhost:5432/ragdb"
@@ -21,7 +37,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
 
     # ---- JWT（双 Token：短效 Access + 长效 Refresh，Refresh 存 Redis 支持吊销/轮换）----
-    jwt_secret: str = "change-me-in-production"
+    jwt_secret: str = ""
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
@@ -67,6 +83,7 @@ class Settings(BaseSettings):
     rrf_k: int = 60                   # RRF 融合常数
     rerank_enabled: bool = False      # 交叉编码器重排（需额外下载约 1GB 模型）
     rerank_model: str = "BAAI/bge-reranker-base"
+    parent_child_enabled: bool = True
 
     # ---- 对话 ----
     history_max_turns: int = 6        # 携带进 Prompt 的历史轮数
@@ -81,6 +98,11 @@ class Settings(BaseSettings):
     semantic_cache_size: int = 50           # 每个 用户×知识库 保留的缓存条数
     semantic_cache_ttl: int = 86400         # 缓存有效期（秒）
 
+    # ---- 证据控制 ----
+    evidence_min_chunks: int = 1
+    evidence_min_rrf_score: float = 0.012
+    prompt_injection_detection_enabled: bool = True
+
     # ---- 限流 ----
     rate_limit_chat: str = "20/minute"
     rate_limit_upload: str = "10/minute"
@@ -89,6 +111,23 @@ class Settings(BaseSettings):
     # ---- 运维 ----
     auto_create_tables: bool = True   # 本地开发免迁移直接建表；生产用 Alembic 时设为 false
     cors_origins: str = ""            # 跨域白名单，逗号分隔；留空=不启用 CORS（同源部署）
+    refresh_cookie_name: str = "rag_refresh"
+    refresh_cookie_secure: bool = False
+    refresh_cookie_samesite: str = "lax"
+    websocket_ticket_ttl_seconds: int = 60
+    expose_refresh_token_in_body: bool = False
+
+    # ---- 可靠任务与可观测性 ----
+    outbox_batch_size: int = 50
+    outbox_max_retries: int = 12
+    outbox_base_retry_seconds: int = 2
+    orphan_object_grace_seconds: int = 86400
+    audit_retention_days: int = 365
+    ingestion_soft_time_limit_seconds: int = 25 * 60
+    ingestion_hard_time_limit_seconds: int = 30 * 60
+    otel_service_name: str = "rag-api"
+    otel_exporter_otlp_endpoint: str = ""
+    worker_metrics_port: int = 9101
 
 
 @lru_cache

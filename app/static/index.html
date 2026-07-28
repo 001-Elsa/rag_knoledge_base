@@ -266,8 +266,13 @@ body { margin: 0; font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", san
             <el-table-column prop="filename" label="文件名" min-width="220" />
             <el-table-column label="状态" width="130">
               <template #default="{row}">
-                <el-tag :type="{ready:'success', processing:'warning', pending:'info', failed:'danger'}[row.status]" size="small">
-                  {{ {ready:'✓ 可检索', processing:'处理中', pending:'排队中', failed:'失败'}[row.status] }}
+                <el-tag :type="{ready:'success', failed:'danger', retrying:'warning'}[row.status] || 'info'" size="small">
+                  {{ {
+                    uploaded:'已上传', queued:'排队中', parsing:'解析中', chunking:'切片中',
+                    embedding:'向量化中', indexing:'建索引中', ready:'✓ 可检索',
+                    retrying:'重试中', failed:'失败', cancelled:'已取消',
+                    deleting:'删除中', deleted:'已删除'
+                  }[row.status] || row.status }}
                 </el-tag>
               </template>
             </el-table-column>
@@ -339,6 +344,7 @@ const app = createApp({
     return {
       // 认证
       logged: false, authTab: 'login', authForm: { username: '', password: '' }, authLoading: false,
+      accessToken: null,
       username: localStorage.getItem('rag_username') || '',
       // 布局
       tab: 'chat', dark: localStorage.getItem('rag_dark') === '1',
@@ -357,7 +363,7 @@ const app = createApp({
   },
   mounted() {
     this.applyTheme();
-    if (localStorage.getItem('rag_access')) { this.logged = true; this.bootstrap(); }
+    this.tryRefresh().then(ok => { if (ok) this.bootstrap(); });
   },
   methods: {
     fmt(n) { return n >= 10000 ? (n / 10000).toFixed(1) + 'w' : String(n); },
@@ -374,29 +380,24 @@ const app = createApp({
     // ---------- 请求封装：401 时自动用 Refresh Token 换新并重试一次 ----------
     async api(path, options = {}, retry = true) {
       const headers = { ...(options.headers || {}) };
-      const access = localStorage.getItem('rag_access');
-      if (access) headers['Authorization'] = 'Bearer ' + access;
+      if (this.accessToken) headers['Authorization'] = 'Bearer ' + this.accessToken;
       if (options.json) { headers['Content-Type'] = 'application/json'; options.body = JSON.stringify(options.json); }
       const res = await fetch(path, { ...options, headers });
       if (res.status === 401 && retry && await this.tryRefresh()) return this.api(path, options, false);
       return res;
     },
     async tryRefresh() {
-      const refresh = localStorage.getItem('rag_refresh');
-      if (!refresh) { this.forceLogout(); return false; }
       const res = await fetch('/api/auth/refresh', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: refresh }),
+        method: 'POST',
       });
       if (!res.ok) { this.forceLogout(); return false; }
       const data = await res.json();
-      localStorage.setItem('rag_access', data.access_token);
-      localStorage.setItem('rag_refresh', data.refresh_token);
-      this.connectWs();
+      this.accessToken = data.access_token;
+      this.logged = true;
       return true;
     },
     forceLogout() {
-      localStorage.removeItem('rag_access'); localStorage.removeItem('rag_refresh');
+      this.accessToken = null;
       this.logged = false;
       if (this.ws) { this.ws.onclose = null; this.ws.close(); this.ws = null; }
     },
@@ -411,8 +412,7 @@ const app = createApp({
         });
         const data = await res.json();
         if (!res.ok) return ElementPlus.ElMessage.error(data.detail || '操作失败');
-        localStorage.setItem('rag_access', data.access_token);
-        localStorage.setItem('rag_refresh', data.refresh_token);
+        this.accessToken = data.access_token;
         localStorage.setItem('rag_username', this.authForm.username);
         this.username = this.authForm.username;
         this.logged = true;
@@ -420,8 +420,7 @@ const app = createApp({
       } finally { this.authLoading = false; }
     },
     async logout() {
-      const refresh = localStorage.getItem('rag_refresh');
-      if (refresh) await fetch('/api/auth/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: refresh }) });
+      await fetch('/api/auth/logout', { method: 'POST' });
       this.forceLogout();
     },
     async bootstrap() {
@@ -433,10 +432,13 @@ const app = createApp({
     },
 
     // ---------- WebSocket：文档处理状态实时推送 ----------
-    connectWs() {
+    async connectWs() {
       if (this.ws) { this.ws.onclose = null; this.ws.close(); }
+      const response = await this.api('/api/auth/ws-ticket', { method: 'POST' });
+      if (!response.ok) return;
+      const { ticket } = await response.json();
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      this.ws = new WebSocket(`${proto}://${location.host}/api/ws?token=${localStorage.getItem('rag_access')}`);
+      this.ws = new WebSocket(`${proto}://${location.host}/api/ws?ticket=${encodeURIComponent(ticket)}`);
       this.ws.onmessage = (e) => {
         const msg = JSON.parse(e.data);
         if (msg.type !== 'document') return;
@@ -579,8 +581,9 @@ const app = createApp({
               case 'rewrite': bot.rewrite = data.query; break;
               case 'tool_call': bot.tools.push({ kind: 'call', name: data.name, args: data.args }); this.scrollBottom(); break;
               case 'tool_result': bot.tools.push({ kind: 'result', name: data.name, summary: data.summary }); this.scrollBottom(); break;
-              case 'sources': bot.sources = data; break;
-              case 'delta': bot.content += data.text; this.scrollBottom(); break;
+                case 'sources': bot.sources = data; break;
+                case 'delta': bot.content += data.text; this.scrollBottom(); break;
+                case 'replacement': bot.content = data.text; this.scrollBottom(); break;
               case 'done':
                 this.conversationId = data.conversation_id;
                 bot.usage = data.usage;

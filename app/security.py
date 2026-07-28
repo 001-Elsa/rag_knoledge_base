@@ -26,7 +26,13 @@ def verify_password(plain: str, hashed: str) -> bool:
     return pwd_context.verify(plain, hashed)
 
 
-def _create_token(user_id: str, token_type: str, lifetime: timedelta, jti: str | None = None) -> str:
+def _create_token(
+    user_id: str,
+    token_type: str,
+    lifetime: timedelta,
+    jti: str | None = None,
+    family_id: str | None = None,
+) -> str:
     now = datetime.now(timezone.utc)  # noqa: UP017 - keep Python 3.10 local compatibility
     payload = {
         "sub": user_id,
@@ -35,6 +41,8 @@ def _create_token(user_id: str, token_type: str, lifetime: timedelta, jti: str |
         "iat": now,
         "exp": now + lifetime,
     }
+    if family_id:
+        payload["family"] = family_id
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
@@ -42,8 +50,16 @@ def create_access_token(user_id: str) -> str:
     return _create_token(user_id, TOKEN_TYPE_ACCESS, timedelta(minutes=settings.access_token_expire_minutes))
 
 
-def create_refresh_token(user_id: str, jti: str) -> str:
-    return _create_token(user_id, TOKEN_TYPE_REFRESH, timedelta(days=settings.refresh_token_expire_days), jti=jti)
+def create_refresh_token(
+    user_id: str, jti: str, family_id: str = "legacy"
+) -> str:
+    return _create_token(
+        user_id,
+        TOKEN_TYPE_REFRESH,
+        timedelta(days=settings.refresh_token_expire_days),
+        jti=jti,
+        family_id=family_id,
+    )
 
 
 def decode_token(token: str, expected_type: str) -> dict | None:

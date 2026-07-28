@@ -1,0 +1,39 @@
+groups:
+  - name: rag-slo
+    rules:
+      - alert: RagApiHighErrorRate
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m]))
+          /
+          clamp_min(sum(rate(http_requests_total[5m])), 0.001)
+          > 0.01
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "RAG API 5xx 比例超过 1%"
+
+      - alert: RagFirstTokenP95Slow
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(llm_first_token_seconds_bucket[10m]))) > 5
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "首 Token P95 超过 5 秒"
+
+      - alert: RagOutboxBacklog
+        expr: outbox_pending_events > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Outbox 待投递事件超过 100"
+
+      - alert: RagIngestionFailures
+        expr: increase(ingestion_failure_total[15m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "15 分钟内文档入库失败超过 5 次"

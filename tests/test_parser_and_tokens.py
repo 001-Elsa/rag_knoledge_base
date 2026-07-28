@@ -22,10 +22,11 @@ def test_parse_unsupported_type(tmp_path):
 
 
 class FakeRedis:
-    """内存版 Redis 替身：只实现 tokens.py 用到的三个命令。"""
+    """内存版 Redis 替身，覆盖 token family 所需命令。"""
 
     def __init__(self):
         self.store: dict[str, str] = {}
+        self.sets: dict[str, set[str]] = {}
 
     async def setex(self, key, ttl, value):
         self.store[key] = value
@@ -33,8 +34,47 @@ class FakeRedis:
     async def getdel(self, key):
         return self.store.pop(key, None)
 
+    async def get(self, key):
+        return self.store.get(key)
+
     async def delete(self, key):
         self.store.pop(key, None)
+        self.sets.pop(key, None)
+
+    async def exists(self, key):
+        return int(key in self.store or key in self.sets)
+
+    async def sadd(self, key, value):
+        self.sets.setdefault(key, set()).add(value)
+
+    async def srem(self, key, value):
+        self.sets.setdefault(key, set()).discard(value)
+
+    async def smembers(self, key):
+        return self.sets.get(key, set()).copy()
+
+    async def expire(self, key, ttl):
+        return True
+
+    def pipeline(self):
+        return FakePipeline(self)
+
+
+class FakePipeline:
+    def __init__(self, redis):
+        self.redis = redis
+        self.commands = []
+
+    def __getattr__(self, name):
+        def queue(*args):
+            self.commands.append((name, args))
+            return self
+
+        return queue
+
+    async def execute(self):
+        for name, args in self.commands:
+            await getattr(self.redis, name)(*args)
 
 
 @pytest.fixture
@@ -52,9 +92,9 @@ def test_refresh_rotation_invalidates_old_token(fake_redis):
         assert pair is not None
         # 旧 token 已作废，重放失败
         assert await tokens_svc.rotate_refresh_token(refresh1) is None
-        # 新 token 可以继续用
+        # 旧 token 重放会吊销整个 family，新 token 也必须重新登录
         _, refresh2 = pair
-        assert await tokens_svc.rotate_refresh_token(refresh2) is not None
+        assert await tokens_svc.rotate_refresh_token(refresh2) is None
 
     asyncio.run(scenario())
 
@@ -72,5 +112,16 @@ def test_garbage_refresh_token(fake_redis):
     async def scenario():
         assert await tokens_svc.rotate_refresh_token("garbage") is None
         await tokens_svc.revoke_refresh_token("garbage")  # 幂等，不抛异常
+
+    asyncio.run(scenario())
+
+
+def test_password_change_can_revoke_all_user_families(fake_redis):
+    async def scenario():
+        _, refresh_a = await tokens_svc.issue_token_pair("user-1")
+        _, refresh_b = await tokens_svc.issue_token_pair("user-1")
+        await tokens_svc.revoke_all_user_families("user-1")
+        assert await tokens_svc.rotate_refresh_token(refresh_a) is None
+        assert await tokens_svc.rotate_refresh_token(refresh_b) is None
 
     asyncio.run(scenario())

@@ -17,22 +17,31 @@ import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db import AsyncSessionLocal, get_db
 from app.deps import get_current_user
 from app.limiter import limiter
-from app.metrics import LLM_FIRST_TOKEN, QA_TOTAL, RETRIEVAL_DURATION
+from app.metrics import (
+    CITATION_VALIDATION_FAILURES,
+    LLM_FIRST_TOKEN,
+    LLM_TOKEN_USAGE,
+    NO_ANSWER_TOTAL,
+    QA_TOTAL,
+    RETRIEVAL_DURATION,
+    SEMANTIC_CACHE_HITS,
+)
 from app.models import Conversation, Message, UsageRecord, User
-from app.routers.kb import get_owned_kb
 from app.schemas import ChatRequest, ConversationOut, ConversationRenameRequest, MessageOut
 from app.services import history as history_svc
 from app.services import semantic_cache, summarizer
 from app.services.agent import run_agent
 from app.services.embedder import embed_query
+from app.services.evidence import assess_evidence, validate_citations
 from app.services.llm import expand_queries, rewrite_query, stream_answer, suggest_followups
+from app.services.permissions import get_kb_with_permission
 from app.services.retriever import retrieve
 
 router = APIRouter(prefix="/api/chat", tags=["问答"])
@@ -50,6 +59,8 @@ def _chunk_to_source(c) -> dict:
         "page": c.page,
         "content": c.content,
         "score": c.score,
+        "vector_similarity": c.vector_similarity,
+        "keyword_hit": c.keyword_hit,
     }
 
 
@@ -58,6 +69,10 @@ async def _persist_round(conv_id: str, user_id: str, question: str, answer: str,
                          record_usage: bool = True) -> None:
     """流式结束后落库（独立 session：流式期间请求级 session 可能已被框架回收）。"""
     async with AsyncSessionLocal() as session:
+        await session.execute(
+            text("SELECT set_config('app.user_id', :user_id, true)"),
+            {"user_id": user_id},
+        )
         rows = [
             Message(conversation_id=conv_id, role="user", content=question),
             Message(conversation_id=conv_id, role="assistant", content=answer,
@@ -76,7 +91,9 @@ async def _persist_round(conv_id: str, user_id: str, question: str, answer: str,
         await session.commit()
     await history_svc.append_history(conv_id, "user", question)
     await history_svc.append_history(conv_id, "assistant", answer)
-    await summarizer.maybe_summarize(conv_id)  # 长对话滚动摘要（未到阈值时立即返回）
+    await summarizer.maybe_summarize(
+        conv_id, user_id
+    )  # 长对话滚动摘要（未到阈值时立即返回）
 
 
 @router.post("")
@@ -89,7 +106,7 @@ async def chat(
 ):
     # ---- 会话与知识库校验 ----
     if body.kb_id:
-        await get_owned_kb(db, body.kb_id, user.id)
+        await get_kb_with_permission(db, body.kb_id, user.id, "query")
 
     if body.conversation_id:
         conv = (
@@ -131,6 +148,7 @@ async def chat(
     if cache_hit is not None:
         async def cached_stream():
             QA_TOTAL.inc()
+            SEMANTIC_CACHE_HITS.inc()
             yield _sse("cached", {"similarity": cache_hit["similarity"], "matched_question": cache_hit["question"]})
             if search_query != body.question:
                 yield _sse("rewrite", {"query": search_query})
@@ -145,18 +163,56 @@ async def chat(
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     # 4. 混合检索（可选多查询扩展）
-    extra_queries = await expand_queries(search_query) if settings.multi_query_enabled else []
+    use_multi_query = (
+        body.retrieval_profile == "multi_query" or settings.multi_query_enabled
+    )
+    extra_queries = await expand_queries(search_query) if use_multi_query else []
     t_retrieval = time.perf_counter()
     chunks = await retrieve(db, user.id, search_query, kb_id=body.kb_id,
-                            extra_queries=extra_queries, query_vec=query_vec)
+                            extra_queries=extra_queries, query_vec=query_vec,
+                            keyword_enabled=body.retrieval_profile != "vector",
+                            rerank_enabled=body.retrieval_profile == "hybrid_rerank",
+                            parent_child_enabled=body.retrieval_profile == "parent_child")
     RETRIEVAL_DURATION.observe(time.perf_counter() - t_retrieval)
     sources = [_chunk_to_source(c) for c in chunks]
+    evidence = assess_evidence(chunks)
 
     async def event_stream():
         QA_TOTAL.inc()
         if search_query != body.question:
             yield _sse("rewrite", {"query": search_query})
         yield _sse("sources", sources)
+        yield _sse("evidence", evidence.as_dict())
+
+        if not evidence.answerable:
+            NO_ANSWER_TOTAL.inc()
+            answer = "知识库中没有找到足够可靠的证据，暂时无法回答这个问题。"
+            yield _sse("delta", {"text": answer})
+            await _persist_round(
+                conv_id,
+                user.id,
+                body.question,
+                answer,
+                sources,
+                {},
+                0,
+                0,
+                record_usage=False,
+            )
+            yield _sse(
+                "done",
+                {
+                    "conversation_id": conv_id,
+                    "no_answer": True,
+                    "usage": {
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "first_token_ms": 0,
+                        "total_ms": 0,
+                    },
+                },
+            )
+            return
 
         answer_parts: list[str] = []
         usage = {"prompt_tokens": 0, "completion_tokens": 0}
@@ -178,16 +234,32 @@ async def chat(
 
         answer = "".join(answer_parts)
         total_ms = int((time.perf_counter() - t_start) * 1000)
-        await _persist_round(conv_id, user.id, body.question, answer, sources,
+        validation = validate_citations(answer, len(sources))
+        persisted_answer = answer
+        if not validation["valid"]:
+            CITATION_VALIDATION_FAILURES.inc()
+            persisted_answer = (
+                "回答未通过引用一致性校验，已阻止展示。请缩小问题范围后重试。"
+            )
+        yield _sse("validation", validation)
+        if persisted_answer != answer:
+            yield _sse("replacement", {"text": persisted_answer})
+        await _persist_round(conv_id, user.id, body.question, persisted_answer, sources,
                              usage, first_token_ms, total_ms)
-        if semantic_cache.is_eligible(history):
-            await semantic_cache.store(user.id, body.kb_id, body.question, query_vec, answer, sources)
+        LLM_TOKEN_USAGE.labels(settings.llm_model, "prompt").inc(
+            usage.get("prompt_tokens", 0)
+        )
+        LLM_TOKEN_USAGE.labels(settings.llm_model, "completion").inc(
+            usage.get("completion_tokens", 0)
+        )
+        if semantic_cache.is_eligible(history) and validation["valid"]:
+            await semantic_cache.store(user.id, body.kb_id, body.question, query_vec, persisted_answer, sources)
 
         yield _sse("done", {"conversation_id": conv_id,
                             "usage": {**usage, "first_token_ms": first_token_ms, "total_ms": total_ms}})
 
-        if settings.suggestions_enabled and answer:
-            followups = await suggest_followups(body.question, answer)
+        if settings.suggestions_enabled and validation["valid"] and persisted_answer:
+            followups = await suggest_followups(body.question, persisted_answer)
             if followups:
                 yield _sse("suggestions", {"questions": followups})
 
@@ -224,12 +296,29 @@ async def _agent_stream(db: AsyncSession, user: User, body: ChatRequest, conv_id
 
     answer = "".join(answer_parts)
     total_ms = int((time.perf_counter() - t_start) * 1000)
-    await _persist_round(conv_id, user.id, body.question, answer, sources, usage, first_token_ms, total_ms)
+    validation = validate_citations(answer, len(sources))
+    persisted_answer = answer
+    if not validation["valid"]:
+        CITATION_VALIDATION_FAILURES.inc()
+        persisted_answer = "回答未通过引用一致性校验，已阻止展示。请缩小问题范围后重试。"
+    yield _sse("validation", validation)
+    if persisted_answer != answer:
+        yield _sse("replacement", {"text": persisted_answer})
+    await _persist_round(
+        conv_id,
+        user.id,
+        body.question,
+        persisted_answer,
+        sources,
+        usage,
+        first_token_ms,
+        total_ms,
+    )
     yield _sse("done", {"conversation_id": conv_id,
                         "usage": {**usage, "first_token_ms": first_token_ms, "total_ms": total_ms}})
 
-    if settings.suggestions_enabled and answer:
-        followups = await suggest_followups(body.question, answer)
+    if settings.suggestions_enabled and validation["valid"] and persisted_answer:
+        followups = await suggest_followups(body.question, persisted_answer)
         if followups:
             yield _sse("suggestions", {"questions": followups})
 

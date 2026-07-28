@@ -3,6 +3,7 @@ fastapi==0.115.6
 uvicorn[standard]==0.34.0
 python-multipart==0.0.20
 aiofiles==24.1.0
+boto3==1.35.99
 
 # 数据库（PostgreSQL + pgvector，psycopg3 同时支持同步/异步）
 sqlalchemy==2.0.36
@@ -42,6 +43,13 @@ slowapi==0.1.9
 
 # 可观测性
 prometheus-client==0.21.1
+opentelemetry-api==1.29.0
+opentelemetry-sdk==1.29.0
+opentelemetry-exporter-otlp-proto-http==1.29.0
+opentelemetry-instrumentation-fastapi==0.50b0
+opentelemetry-instrumentation-sqlalchemy==0.50b0
+opentelemetry-instrumentation-redis==0.50b0
+opentelemetry-instrumentation-celery==0.50b0
 
 # Celery 监控面板
 flower==2.0.1

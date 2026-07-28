@@ -17,8 +17,16 @@ jieba==0.42.1
 slowapi==0.1.9
 prometheus-client==0.21.1
 aiofiles==24.1.0
+boto3==1.35.99
 python-multipart==0.0.20
 alembic==1.14.0
+opentelemetry-api==1.29.0
+opentelemetry-sdk==1.29.0
+opentelemetry-exporter-otlp-proto-http==1.29.0
+opentelemetry-instrumentation-fastapi==0.50b0
+opentelemetry-instrumentation-sqlalchemy==0.50b0
+opentelemetry-instrumentation-redis==0.50b0
+opentelemetry-instrumentation-celery==0.50b0
 
 # 工具
 pytest==8.3.4

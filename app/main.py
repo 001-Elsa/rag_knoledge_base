@@ -20,10 +20,11 @@ from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
 
 from app.config import settings
-from app.db import Base, async_engine
+from app.db import Base, async_engine, sync_engine
 from app.limiter import limiter
 from app.metrics import HTTP_DURATION, HTTP_REQUESTS, render_metrics
-from app.routers import auth, chat, documents, kb, stats, ws
+from app.observability import configure_observability
+from app.routers import auth, chat, documents, kb, stats, tenancy, ws
 from app.services.history import get_redis
 
 # ---- 全链路请求 ID：contextvar 贯穿一次请求的所有日志，排查问题可按 ID 串起来 ----
@@ -33,12 +34,19 @@ request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id
 class RequestIdFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         record.request_id = request_id_var.get()
+        try:
+            from opentelemetry import trace
+
+            context = trace.get_current_span().get_span_context()
+            record.trace_id = f"{context.trace_id:032x}" if context.is_valid else "-"
+        except Exception:
+            record.trace_id = "-"
         return True
 
 
 logging.basicConfig(
     level=logging.DEBUG if settings.debug else logging.INFO,
-    format="%(asctime)s %(levelname)s [%(name)s] [rid=%(request_id)s] %(message)s",
+    format="%(asctime)s %(levelname)s [%(name)s] [rid=%(request_id)s trace=%(trace_id)s] %(message)s",
 )
 for _handler in logging.getLogger().handlers:
     _handler.addFilter(RequestIdFilter())
@@ -47,17 +55,26 @@ logger = logging.getLogger("app")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if len(settings.jwt_secret) < 32:
+        raise RuntimeError("JWT_SECRET must be configured with at least 32 characters")
+    if settings.storage_backend.lower() in {"s3", "minio"} and (
+        not settings.s3_access_key or not settings.s3_secret_key
+    ):
+        raise RuntimeError("S3_ACCESS_KEY and S3_SECRET_KEY are required")
     # 生产走 Alembic 迁移（alembic upgrade head）；本地开发可开 auto_create_tables 免迁移
     async with async_engine.begin() as conn:
-        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         if settings.auto_create_tables:
+            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
             await conn.run_sync(Base.metadata.create_all)
+        else:
+            await conn.execute(text("SELECT 1"))
     logger.info("数据库初始化完成（auto_create_tables=%s）", settings.auto_create_tables)
     yield
     await async_engine.dispose()
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
+configure_observability(app, [async_engine.sync_engine, sync_engine])
 
 # 限流
 app.state.limiter = limiter
@@ -80,6 +97,7 @@ if settings.cors_origins:
 @app.middleware("http")
 async def observability(request: Request, call_next):
     rid = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:12]
+    request.state.request_id = rid
     request_id_var.set(rid)
     start = time.perf_counter()
     response = await call_next(request)
@@ -102,6 +120,8 @@ app.include_router(kb.router)
 app.include_router(documents.router)
 app.include_router(chat.router)
 app.include_router(stats.router)
+app.include_router(tenancy.router)
+app.include_router(tenancy.organization_router)
 app.include_router(ws.router)
 
 
@@ -113,13 +133,13 @@ async def health():
     try:
         async with async_engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
-    except Exception as exc:
-        checks["database"] = f"error: {exc}"
+    except Exception:
+        checks["database"] = "unavailable"
         healthy = False
     try:
         await get_redis().ping()
-    except Exception as exc:
-        checks["redis"] = f"error: {exc}"
+    except Exception:
+        checks["redis"] = "unavailable"
         healthy = False
     status_code = 200 if healthy else 503
     return Response(

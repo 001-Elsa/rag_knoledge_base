@@ -20,7 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import Chunk, Document
+from app.models import Chunk, Document, KnowledgeBase, WorkspaceMembership
 from app.services.embedder import embed_query
 
 # 检索用停用词（简版）
@@ -38,6 +38,9 @@ class RetrievedChunk:
     page: int | None
     content: str
     score: float
+    vector_similarity: float = 0.0
+    keyword_hit: bool = False
+    parent_seq: int = 0
 
 
 _TSQUERY_SAFE = re.compile(r"^[\w一-鿿]+$")  # 只允许中英文数字下划线，防 tsquery 语法注入
@@ -76,6 +79,9 @@ async def retrieve(
     kb_id: str | None = None,
     extra_queries: list[str] | None = None,
     query_vec: list[float] | None = None,
+    keyword_enabled: bool = True,
+    rerank_enabled: bool | None = None,
+    parent_child_enabled: bool | None = None,
 ) -> list[RetrievedChunk]:
     """对指定用户（可限定知识库）执行混合检索，返回 top_k 片段（附带来源文档名与页码）。
 
@@ -83,7 +89,10 @@ async def retrieve(
     - query_vec：原查询向量（若调用方已算过——如语义缓存查过——传入避免重复编码）。
     """
     n = settings.retrieval_candidates
-    filters = [Chunk.owner_id == owner_id]
+    filters = [
+        WorkspaceMembership.user_id == owner_id,
+        Chunk.index_version == Document.active_index_version,
+    ]
     if kb_id:
         filters.append(Chunk.kb_id == kb_id)
 
@@ -91,6 +100,11 @@ async def retrieve(
         stmt = (
             select(Chunk, Document.filename, Chunk.embedding.cosine_distance(vec).label("dist"))
             .join(Document, Chunk.document_id == Document.id)
+            .join(KnowledgeBase, KnowledgeBase.id == Chunk.kb_id)
+            .join(
+                WorkspaceMembership,
+                WorkspaceMembership.workspace_id == KnowledgeBase.workspace_id,
+            )
             .where(*filters)
             .order_by("dist")
             .limit(n)
@@ -109,12 +123,17 @@ async def retrieve(
     # 只对原查询做（变体是语义级改写，关键词一路用原词更稳）
     kw_rows = []
     tsquery_expr = build_tsquery(extract_keywords(query))
-    if tsquery_expr:
+    if keyword_enabled and tsquery_expr:
         tsq = func.to_tsquery("simple", tsquery_expr)
         rank = func.ts_rank(Chunk.content_tokens, tsq).label("rank")
         kw_stmt = (
             select(Chunk, Document.filename, rank)
             .join(Document, Chunk.document_id == Document.id)
+            .join(KnowledgeBase, KnowledgeBase.id == Chunk.kb_id)
+            .join(
+                WorkspaceMembership,
+                WorkspaceMembership.workspace_id == KnowledgeBase.workspace_id,
+            )
             .where(*filters, Chunk.content_tokens.op("@@")(tsq))
             .order_by(rank.desc())
             .limit(n)
@@ -130,7 +149,20 @@ async def retrieve(
         k=settings.rrf_k,
     )
     ranked_ids = sorted(fused, key=fused.get, reverse=True)
+    vector_similarity: dict[str, float] = {}
+    for route in vector_routes:
+        for chunk, _, distance in route:
+            vector_similarity[chunk.id] = max(
+                vector_similarity.get(chunk.id, 0.0),
+                max(0.0, 1.0 - float(distance)),
+            )
+    keyword_ids = {row[0].id for row in kw_rows}
 
+    use_parent = (
+        settings.parent_child_enabled
+        if parent_child_enabled is None
+        else parent_child_enabled
+    )
     results = [
         RetrievedChunk(
             chunk_id=cid,
@@ -138,14 +170,31 @@ async def retrieve(
             filename=by_id[cid][1],
             seq=by_id[cid][0].seq,
             page=by_id[cid][0].page,
-            content=by_id[cid][0].content,
+            content=(
+                by_id[cid][0].parent_content
+                if use_parent and by_id[cid][0].parent_content
+                else by_id[cid][0].content
+            ),
             score=round(fused[cid], 6),
+            vector_similarity=round(vector_similarity.get(cid, 0.0), 6),
+            keyword_hit=cid in keyword_ids,
+            parent_seq=by_id[cid][0].parent_seq,
         )
         for cid in ranked_ids
     ]
+    if use_parent:
+        unique_parents: list[RetrievedChunk] = []
+        seen_parents: set[tuple[str, int]] = set()
+        for result in results:
+            key = (result.document_id, result.parent_seq)
+            if key not in seen_parents:
+                seen_parents.add(key)
+                unique_parents.append(result)
+        results = unique_parents
 
     # ----（可选）交叉编码器重排：对候选做精排，代价是延迟上升 ----
-    if settings.rerank_enabled and results:
+    use_reranker = settings.rerank_enabled if rerank_enabled is None else rerank_enabled
+    if use_reranker and results:
         results = await asyncio.to_thread(_cross_encoder_rerank, query, results)
 
     return results[: settings.retrieval_top_k]

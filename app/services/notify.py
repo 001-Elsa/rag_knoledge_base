@@ -35,7 +35,15 @@ def publish_sync(user_id: str, payload: dict) -> None:
         logger.warning("通知发布失败（Redis 不可用？）", exc_info=True)
 
 
-def document_event(document_id: str, status: str, *, filename: str = "", chunk_count: int = 0, error: str | None = None) -> dict:
+def document_event(
+    document_id: str,
+    status: str,
+    *,
+    filename: str = "",
+    chunk_count: int = 0,
+    error: str | None = None,
+    **details,
+) -> dict:
     return {
         "type": "document",
         "document_id": document_id,
@@ -43,4 +51,5 @@ def document_event(document_id: str, status: str, *, filename: str = "", chunk_c
         "status": status,
         "chunk_count": chunk_count,
         "error": error,
+        **details,
     }

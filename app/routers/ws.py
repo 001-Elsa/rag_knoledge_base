@@ -11,9 +11,9 @@ import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from app.security import decode_access_token
 from app.services.history import get_redis
 from app.services.notify import channel_for
+from app.services.tokens import consume_websocket_ticket
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +21,9 @@ router = APIRouter(tags=["通知"])
 
 
 @router.websocket("/api/ws")
-async def notifications(websocket: WebSocket, token: str = ""):
-    user_id = decode_access_token(token)
+async def notifications(websocket: WebSocket, ticket: str = ""):
+    # One-time, short-lived ticket avoids leaking a reusable access token in proxy logs.
+    user_id = await consume_websocket_ticket(ticket)
     if user_id is None:
         await websocket.close(code=4401, reason="unauthorized")
         return

@@ -4,6 +4,9 @@
 保留页码信息是为了引用能精确到"某文件第几页"，用户可以回原文核对。
 """
 from pathlib import Path
+from zipfile import BadZipFile, ZipFile
+
+from app.config import settings
 
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".md", ".txt"}
 
@@ -27,12 +30,26 @@ def _parse_pdf(path: Path) -> list[Segment]:
     from pypdf import PdfReader
 
     reader = PdfReader(str(path))
+    if len(reader.pages) > settings.max_document_pages:
+        raise ValueError(
+            f"PDF 页数超过限制（{len(reader.pages)} > {settings.max_document_pages}）"
+        )
     return [(page.extract_text() or "", i) for i, page in enumerate(reader.pages, start=1)]
 
 
 def _parse_docx(path: Path) -> str:
     import docx
 
+    try:
+        with ZipFile(path) as archive:
+            expanded_bytes = sum(info.file_size for info in archive.infolist())
+    except BadZipFile as exc:
+        raise ValueError("DOCX 压缩包损坏") from exc
+    max_expanded = settings.max_uncompressed_mb * 1024 * 1024
+    if expanded_bytes > max_expanded:
+        raise ValueError(
+            f"DOCX 解压大小超过限制（{settings.max_uncompressed_mb}MB）"
+        )
     document = docx.Document(str(path))
     parts: list[str] = [p.text for p in document.paragraphs if p.text.strip()]
     # 表格内容也要抽取，否则丢信息

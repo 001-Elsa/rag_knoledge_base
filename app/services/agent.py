@@ -19,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import DocStatus, Document
+from app.models import Document, KnowledgeBase, WorkspaceMembership
 from app.services.llm import chat_completion
 from app.services.retriever import RetrievedChunk, retrieve
 
@@ -156,7 +156,18 @@ async def _exec_tool(
             return "\n\n".join(lines)
 
         if name == "list_documents":
-            stmt = select(Document).where(Document.owner_id == owner_id, Document.status == DocStatus.ready)
+            stmt = (
+                select(Document)
+                .join(KnowledgeBase, KnowledgeBase.id == Document.kb_id)
+                .join(
+                    WorkspaceMembership,
+                    WorkspaceMembership.workspace_id == KnowledgeBase.workspace_id,
+                )
+                .where(
+                    WorkspaceMembership.user_id == owner_id,
+                    Document.active_index_version.is_not(None),
+                )
+            )
             if kb_id:
                 stmt = stmt.where(Document.kb_id == kb_id)
             docs = list((await db.execute(stmt)).scalars())

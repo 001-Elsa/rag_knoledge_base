@@ -12,7 +12,7 @@
 """
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.config import settings
 from app.db import AsyncSessionLocal
@@ -28,12 +28,16 @@ SUMMARY_PROMPT = """把对话内容压缩成客观的要点摘要（200 字以�
 只输出摘要本身。"""
 
 
-async def maybe_summarize(conversation_id: str) -> None:
+async def maybe_summarize(conversation_id: str, user_id: str) -> None:
     """检查并（在需要时）更新会话摘要。独立 session，可在流式响应结束后调用。"""
     if not settings.history_summary_enabled:
         return
     try:
         async with AsyncSessionLocal() as db:
+            await db.execute(
+                text("SELECT set_config('app.user_id', :user_id, true)"),
+                {"user_id": user_id},
+            )
             conv = await db.get(Conversation, conversation_id)
             if conv is None:
                 return

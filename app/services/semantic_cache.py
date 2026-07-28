@@ -98,6 +98,17 @@ async def invalidate_user(user_id: str) -> None:
         logger.warning("语义缓存失效失败", exc_info=True)
 
 
+async def invalidate_kb(kb_id: str) -> None:
+    """Invalidate shared-workspace answers for a KB and all-scope answer caches."""
+    try:
+        redis = get_redis()
+        for pattern in (f"{_PREFIX}*:{kb_id}", f"{_PREFIX}*:all"):
+            async for key in redis.scan_iter(match=pattern, count=100):
+                await redis.delete(key)
+    except Exception:
+        logger.warning("知识库语义缓存失效失败", exc_info=True)
+
+
 def invalidate_user_sync(user_id: str) -> None:
     """同步版（Celery worker 用）。"""
     try:
@@ -108,3 +119,15 @@ def invalidate_user_sync(user_id: str) -> None:
             client.delete(key)
     except Exception:
         logger.warning("语义缓存失效失败（sync）", exc_info=True)
+
+
+def invalidate_kb_sync(kb_id: str) -> None:
+    try:
+        from app.services.notify import _get_sync_client
+
+        client = _get_sync_client()
+        for pattern in (f"{_PREFIX}*:{kb_id}", f"{_PREFIX}*:all"):
+            for key in client.scan_iter(match=pattern, count=100):
+                client.delete(key)
+    except Exception:
+        logger.warning("知识库语义缓存失效失败（sync）", exc_info=True)
