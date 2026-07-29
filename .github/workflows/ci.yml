@@ -83,7 +83,30 @@ jobs:
         run: alembic upgrade head
 
       - name: Test (pytest)
-        run: pytest -q
+        run: pytest -q --junitxml=pytest-results.xml
+
+      - name: Report pytest failures
+        if: failure()
+        run: |
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          report = Path("pytest-results.xml")
+          if not report.exists():
+              raise SystemExit("pytest did not produce a JUnit report")
+          root = ET.parse(report).getroot()
+          for case in root.iter("testcase"):
+              failure = case.find("failure") or case.find("error")
+              if failure is None:
+                  continue
+              message = (failure.get("message") or failure.text or "pytest failure").strip()
+              message = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+              print(
+                  f"::error file={case.get('file', '')},line={case.get('line', '1')},"
+                  f"title={case.get('classname', '')}.{case.get('name', '')}::{message[:1500]}"
+              )
+          PY
 
       - name: Offline retrieval quality gate
         run: python scripts/ci_eval_retrieval.py
