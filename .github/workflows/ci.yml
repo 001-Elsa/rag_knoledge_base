@@ -127,3 +127,70 @@ jobs:
           assert all(required <= row.keys() for row in rows)
           assert len({row["id"] for row in rows}) == len(rows)
           PY
+
+      - name: Upload eval reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-reports
+          path: eval/reports/
+          retention-days: 30
+
+      - name: Verify audit hash chain (smoke)
+        if: always()
+        env:
+          RUN_INTEGRATION: "0"  # use app's DB but skip other integration tests
+        run: |
+          python - <<'PY'
+          # Smoke test: verify_audit_chain.py imports and the hash logic is self-consistent.
+          import sys
+          sys.path.insert(0, ".")
+          from scripts.verify_audit_chain import verify_rows, _entry_hash
+
+          # Synthetic row to ensure hash computation is deterministic.
+          row = {
+              "id": "test-001",
+              "chain_seq": 1,
+              "action": "test.action",
+              "resource_type": "document",
+              "resource_id": "doc-001",
+              "actor_user_id": "user-001",
+              "workspace_id": "ws-001",
+              "outcome": "success",
+              "before": None,
+              "after": {"status": "ready"},
+              "created_at": "2026-01-01T00:00:00+00:00",
+          }
+          h1 = _entry_hash("0" * 64, row)
+
+          # Same inputs → same hash.
+          assert h1 == _entry_hash("0" * 64, dict(row)), "hash must be deterministic"
+
+          # Chain linking test: prev_hash becomes first component.
+          h2 = _entry_hash(h1, {**row, "id": "test-002", "chain_seq": 2})
+          assert h2 != h1
+
+          # Verify full chain.
+          failures = verify_rows([
+              {**row, "prev_hash": "0" * 64, "entry_hash": h1},
+              {**row, "id": "test-002", "chain_seq": 2, "prev_hash": h1, "entry_hash": h2},
+          ])
+          assert not failures, f"chain verification failed: {failures}"
+          print(f"[PASS] audit hash chain smoke test ({h1[:12]}... → {h2[:12]}...)")
+          PY
+
+      - name: Gate check summary
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          report = Path("eval/reports/ci_hybrid.json")
+          baseline = Path("eval/baseline.json")
+          if report.exists():
+              data = json.loads(report.read_text())
+              print(f"CI hybrid: Hit@5={data['hit_rate_at_5']:.3f} MRR={data['mrr']:.3f} P95={data['p95_retrieval_ms']:.1f}ms")
+          if baseline.exists():
+              data = json.loads(baseline.read_text())
+              print(f"Baseline:  Hit@5={data['hit_rate_at_5']:.3f} MRR={data['mrr']:.3f} P95={data['p95_retrieval_ms']:.1f}ms")
+          PY

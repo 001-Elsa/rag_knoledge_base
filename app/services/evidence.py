@@ -1,15 +1,18 @@
 """Runtime evidence gating, prompt-injection defense, and citation validation.
 
-Three layers of defense against indirect prompt injection:
+Four layers of defense against indirect prompt injection:
 1. Pattern-based risk scoring (`injection_risk`) classifies text as none/medium/high;
 2. A configurable chunk policy (`apply_injection_policy`) flags, downweights, or
    removes high-risk chunks before they reach the LLM context;
-3. Optional model-based secondary classification (`classify_injection_with_llm_sync`)
+3. Ingestion-time quarantine (`should_quarantine`) isolates suspicious documents;
+4. Optional model-based secondary classification (`classify_injection_with_llm_sync`)
    confirms quarantine decisions during ingestion.
 
 Citation checking is also two-layered: deterministic number/uncited-claim checks
 (`validate_citations`) plus optional LLM claim-evidence entailment
 (`verify_claim_entailment`).
+
+Injection statistics are tracked per-request via `injection_stats()` for monitoring.
 """
 
 import json
@@ -39,6 +42,8 @@ _HIGH_RISK_PATTERNS = [
         r"(delete|remove|drop|删除|清空).{0,20}(data|database|用户|数据)",
         r"you (are|must) now (act|behave|pretend)",
         r"(现在开始|从现在起).{0,12}(扮演|假装|忽略)",
+        r"(forget|erase|overwrite|reset).{0,20}(memory|context|history|rules)",
+        r"(output|return|reply).{0,30}(exactly|verbatim|原文|一字不差)",
     )
 ]
 _MEDIUM_RISK_PATTERNS = [
@@ -49,6 +54,8 @@ _MEDIUM_RISK_PATTERNS = [
         r"(respond|answer|reply) (only )?with",
         r"(这是|以下是)(新的|最新的)(指令|规则|要求)",
         r"disregard .{0,30}(context|document|instruction)",
+        r"(insert|inject|override|篡改|插入).{0,20}(response|answer|回答|回复)",
+        r"<\|.{0,10}\|>",  # Special token injection
     )
 ]
 _CITATION = re.compile(r"\[(\d+)]")
@@ -56,6 +63,48 @@ _CITATION = re.compile(r"\[(\d+)]")
 RISK_NONE = "none"
 RISK_MEDIUM = "medium"
 RISK_HIGH = "high"
+
+
+@dataclass
+class InjectionStats:
+    """Per-request injection statistics for monitoring and alerting."""
+    chunks_checked: int = 0
+    none_count: int = 0
+    medium_count: int = 0
+    high_count: int = 0
+    action_taken: str = "none"
+    chunks_removed: int = 0
+    chunks_downweighted: int = 0
+    combined_risk_score: float = 0.0  # 0.0-1.0 across all chunks
+    highest_risk: str = RISK_NONE
+
+    def as_dict(self) -> dict:
+        return asdict(self)
+
+
+def injection_stats(chunks: list[RetrievedChunk], info: dict) -> InjectionStats:
+    """Aggregate injection statistics across a batch of retrieved chunks."""
+    stats = InjectionStats()
+    stats.chunks_checked = len(chunks)
+    risk_levels = info.get("risk_levels", {})
+    for level in risk_levels.values():
+        if level == RISK_MEDIUM:
+            stats.medium_count += 1
+        elif level == RISK_HIGH:
+            stats.high_count += 1
+    stats.none_count = stats.chunks_checked - stats.medium_count - stats.high_count
+    stats.action_taken = info.get("action", "none")
+    stats.chunks_removed = len(info.get("removed_chunk_ids", []))
+    stats.chunks_downweighted = info.get("high_risk_count", 0) if stats.action_taken == "downweight" else 0
+    # Combined risk score: weighted sum where high=1.0, medium=0.3, none=0.0
+    stats.combined_risk_score = (
+        (stats.high_count * 1.0 + stats.medium_count * 0.3) / max(1, stats.chunks_checked)
+    )
+    if stats.high_count > 0:
+        stats.highest_risk = RISK_HIGH
+    elif stats.medium_count > 0:
+        stats.highest_risk = RISK_MEDIUM
+    return stats
 
 
 @dataclass

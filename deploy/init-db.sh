@@ -15,4 +15,8 @@ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rag_worker') \gexec
 
 GRANT CONNECT ON DATABASE :"db_name" TO rag_app, rag_worker;
 GRANT USAGE ON SCHEMA public TO rag_app, rag_worker;
+
+-- Future grants: Alembic migrations (0001-0008) assign table-level privileges via
+-- GRANT … TO rag_app / rag_worker. Migration 0009 revokes UPDATE+DELETE on
+-- audit_logs from rag_app for append-only immutability (item 17).
 SQL

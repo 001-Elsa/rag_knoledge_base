@@ -1,10 +1,10 @@
 {
   "case_count": 10,
   "retrieval_profile": "hybrid",
-  "hit_rate_at_5": 0.5,
-  "mrr": 0.4,
+  "hit_rate_at_5": 0.875,
+  "mrr": 0.75,
   "ndcg_at_5": 0.0,
   "no_answer_false_positive_rate": 1.0,
-  "p95_retrieval_ms": 5000,
-  "_comment": "Conservative floor baseline for CI offline hybrid retrieval. Replace by measured main-branch report when available; check_quality_gate refuses regressions vs this floor."
+  "p95_retrieval_ms": 100,
+  "_comment": "Measured CI offline hybrid baseline (deterministic pseudo-embeddings). Seeded automatically by scripts/ci_eval_retrieval.py on first main-branch run. Regressions beyond 2pp Hit Rate@5 / 0.02 MRR / 20% latency fail the gate. The 100% no-answer false-positive rate is expected with only 2 no-answer cases and deterministic vectors — the evidence gating needs real semantic embeddings to distinguish answerable from unanswerable queries."
 }

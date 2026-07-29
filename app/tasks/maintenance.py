@@ -1,4 +1,4 @@
-"""Reconciliation, reliable resource deletion, and audit retention jobs."""
+"""Reconciliation, reliable resource deletion, audit retention, and DLQ auto-recovery."""
 
 import json
 import logging
@@ -11,7 +11,15 @@ from sqlalchemy import delete, select, text, update
 from app.config import settings
 from app.db import SyncSessionLocal
 from app.metrics import RESOURCE_DELETE_FAILURES
-from app.models import AuditLog, Chunk, DocStatus, Document, OutboxEvent
+from app.models import (
+    AuditLog,
+    Chunk,
+    DeadLetterStatus,
+    DeadLetterTask,
+    DocStatus,
+    Document,
+    OutboxEvent,
+)
 from app.services.object_storage import get_object_storage, make_staging_file
 from app.tasks import celery_app
 from app.tasks.ingest import record_dead_letter
@@ -260,3 +268,89 @@ def purge_expired_audit_logs() -> dict:
         "archived": archived,
         "retention_days": settings.audit_retention_days,
     }
+
+
+@celery_app.task(name="retry_pending_dead_letters")
+def retry_pending_dead_letters(
+    cooldown_hours: int = 1,
+    max_per_run: int = 20,
+) -> dict:
+    """Periodically re-enqueue pending dead letters after a cooldown (item 12).
+
+    Only retries ingest/cleanup dead letters whose original failure may have been
+    transient. Dead letters that have already been replayed/discarded are skipped.
+    The cooldown ensures we don't retry in a tight loop — operators should
+    investigate dead letters that keep re-appearing.
+    """
+    cutoff = _now() - timedelta(hours=cooldown_hours)
+    retried = 0
+    with SyncSessionLocal() as db:
+        pending = list(
+            db.execute(
+                select(DeadLetterTask)
+                .where(
+                    DeadLetterTask.status == DeadLetterStatus.pending,
+                    DeadLetterTask.source.in_(["ingest", "cleanup"]),
+                    DeadLetterTask.created_at < cutoff,
+                )
+                .order_by(DeadLetterTask.created_at)
+                .limit(max_per_run)
+            ).scalars()
+        )
+        for letter in pending:
+            event_id = uuid.uuid4().hex
+            if letter.source == "ingest" and letter.document_id:
+                document = db.get(Document, letter.document_id)
+                if document is None:
+                    letter.status = DeadLetterStatus.discarded
+                    letter.resolved_at = _now()
+                    letter.error = (letter.error or "") + " | auto-discarded: document gone"
+                    continue
+                if document.status not in {DocStatus.failed, DocStatus.retrying}:
+                    letter.status = DeadLetterStatus.discarded
+                    letter.resolved_at = _now()
+                    letter.error = (
+                        letter.error or ""
+                    ) + f" | auto-discarded: document is {document.status.value}"
+                    continue
+                document.status = DocStatus.queued
+                document.stage = DocStatus.queued.value
+                document.error = None
+                document.processing_token = None
+                document.worker_id = None
+                if document.target_index_version is None:
+                    document.target_index_version = (document.active_index_version or 0) + 1
+                db.add(
+                    OutboxEvent(
+                        id=event_id,
+                        event_type="document.ingest.requested",
+                        aggregate_type="document",
+                        aggregate_id=document.id,
+                        payload={
+                            "document_id": document.id,
+                            "workspace_id": letter.workspace_id,
+                            "reason": "dlq-auto-retry",
+                            "from_stage": letter.failed_stage or "parsing",
+                        },
+                        dedup_key=f"document.ingest.dlq-auto:{letter.id}:{event_id}",
+                    )
+                )
+            elif letter.source == "cleanup":
+                db.add(
+                    OutboxEvent(
+                        id=event_id,
+                        event_type="resource.delete.requested",
+                        aggregate_type="document",
+                        aggregate_id=letter.document_id or letter.kb_id or letter.id,
+                        payload=dict(letter.payload or {}),
+                        dedup_key=f"resource.delete.dlq-auto:{letter.id}:{event_id}",
+                    )
+                )
+            else:
+                continue
+            letter.status = DeadLetterStatus.replayed
+            letter.resolved_at = _now()
+            retried += 1
+        db.commit()
+    logger.info("dlq auto-retry replayed %d dead letters", retried)
+    return {"retried": retried, "cooldown_hours": cooldown_hours}

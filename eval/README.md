@@ -34,3 +34,36 @@ python scripts/check_injection_gate.py
 门禁默认约束：Hit Rate@5 相对下降不超过 2 个百分点、MRR 不下降超过 0.02、无答案误答率不恶化、
 P95 检索延迟不回退超过 20%。CI 额外用确定性伪向量跑离线 hybrid 门禁（`scripts/ci_eval_retrieval.py`），
 不等于线上真实 Embedding/LLM 质量报告。
+
+## 实测消融结果
+
+以下结果由 `scripts/run_local_ablation.py` 在 BAAI/bge-small-zh-v1.5 嵌入模型下实测得到。
+Golden set: 8 个可回答 + 2 个不可回答（共 10 条）。
+
+| Strategy | Hit Rate@5 | MRR | nDCG@5 | No-answer FP | P95 ms |
+|---|---:|---:|---:|---:|---:|
+| vector | 1.000 | 0.938 | 0.954 | 1.000 | 137.8 |
+| hybrid | 1.000 | 0.938 | 0.954 | 1.000 | 164.5 |
+| hybrid_rerank | 1.000 | 1.000 | 1.000 | 1.000 | 473386.9 |
+| parent_child | 1.000 | 0.938 | 0.954 | 1.000 | 417.6 |
+| multi_query | 1.000 | 0.938 | 0.954 | 1.000 | 1921.7 |
+
+**已知限制：**
+- No-answer 误答率 100%：当前仅有 2 条不可回答样本，证据门控（`assess_evidence`）
+  在检索到任何 chunks 时都会判定 answerable=true。需要在黄金集中增加更多
+  不可回答样本（如覆盖不同主题、不同领域），并结合语义相似度阈值改进门控。
+- Reranker 延迟 ~473s：首次加载 BAAI/bge-reranker-base 模型（~1GB），
+  后续推理约为 100-200ms/query。报告中的 P95 含首次冷启动。
+- 所有策略 Hit Rate@5 = 1.0：当前 8 条可回答样本覆盖范围有限，
+  策略间的区分度需要扩增黄金集（建议扩大到 50+ 条）才能显现。
+
+**如何复现：**
+```bash
+python scripts/run_local_ablation.py --with-llm
+```
+
+**如何对比 RAG vs Agent：**
+```bash
+python scripts/eval_rag_vs_agent.py --user USER --password PASS
+```
+结果写入 `eval/reports/rag_vs_agent.json`。

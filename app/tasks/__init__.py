@@ -37,6 +37,11 @@ celery_app.conf.update(
             "task": "purge_expired_audit_logs",
             "schedule": 86400.0,
         },
+        "retry-pending-dead-letters": {
+            "task": "retry_pending_dead_letters",
+            "schedule": 1800.0,  # every 30 minutes
+            "args": [1, 20],     # cooldown=1h, max 20 per run
+        },
     },
 )
 
