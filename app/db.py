@@ -3,9 +3,12 @@
 API 侧使用异步引擎（psycopg async），Celery worker 侧使用同步引擎。
 两者共用同一套 ORM 模型。
 """
+import os
+
 from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from app.config import settings
 
@@ -15,7 +18,16 @@ class Base(DeclarativeBase):
 
 
 # ---- 异步引擎（FastAPI 使用）----
-async_engine = create_async_engine(settings.database_url, pool_size=10, max_overflow=20, pool_pre_ping=True)
+# Integration tests use several independent ``asyncio.run()`` event loops.  A
+# pooled async connection is tied to the loop that created it, so disable the
+# pool only for that explicit CI mode to prevent reusing a closed-loop socket.
+_async_engine_options = {"pool_pre_ping": True}
+if os.getenv("RUN_INTEGRATION") == "1":
+    _async_engine_options["poolclass"] = NullPool
+else:
+    _async_engine_options.update(pool_size=10, max_overflow=20)
+
+async_engine = create_async_engine(settings.database_url, **_async_engine_options)
 AsyncSessionLocal = async_sessionmaker(async_engine, class_=AsyncSession, expire_on_commit=False)
 
 
