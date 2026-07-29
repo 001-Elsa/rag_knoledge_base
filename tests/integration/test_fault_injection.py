@@ -176,9 +176,9 @@ def test_index_activation_failure_leaves_old_version_queryable(tmp_path, monkeyp
         raise RuntimeError("embedding killed mid-flight")
 
     monkeypatch.setattr(ingest_tasks, "embed_documents", boom)
-    from celery.exceptions import Retry
-
-    with pytest.raises(Retry):
+    # ``Task.run`` is invoked directly in this test, so Celery re-raises the
+    # original retryable exception instead of scheduling a broker retry.
+    with pytest.raises(RuntimeError, match="embedding killed mid-flight"):
         ingest_tasks.ingest_document.run(document_id)
 
     with SyncSessionLocal() as db:
@@ -290,6 +290,9 @@ def test_resource_delete_outbox_removes_object(tmp_path):
             result = maintenance_tasks.delete_resources.run(payload=payload)
             assert result["ok"] is True
             assert not filepath.exists()
+            # The worker uses its own synchronous session; discard this
+            # session's cached instance before checking the committed delete.
+            db.expire(document)
             assert await db.get(Document, document_id) is None
 
             await db.delete(await db.get(Organization, organization.id))

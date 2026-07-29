@@ -25,9 +25,16 @@ def get_redis() -> aioredis.Redis:
 async def close_redis() -> None:
     """Close the loop-bound client and let the next lifecycle create a fresh one."""
     global _redis
-    if _redis is not None:
-        await _redis.aclose()
-        _redis = None
+    client, _redis = _redis, None
+    if client is not None:
+        try:
+            await client.aclose()
+        except RuntimeError as exc:
+            # A test client may already have closed the loop that owns the
+            # connection.  The client has been detached above, so a later
+            # lifecycle will create one bound to its own loop.
+            if "Event loop is closed" not in str(exc):
+                raise
 
 
 def _key(conversation_id: str) -> str:
