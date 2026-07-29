@@ -3,6 +3,7 @@
 设计：消息永远先落库（不丢数据），Redis 只作为热数据缓存（拼 Prompt 时免查库）。
 缓存策略：写入时同步追加，读取 miss 时从库里回填（Cache-Aside）。
 """
+import asyncio
 import json
 
 import redis.asyncio as aioredis
@@ -13,19 +14,25 @@ from app.config import settings
 from app.models import Message
 
 _redis: aioredis.Redis | None = None
+_redis_loop: asyncio.AbstractEventLoop | None = None
 
 
 def get_redis() -> aioredis.Redis:
-    global _redis
-    if _redis is None:
+    global _redis, _redis_loop
+    loop = asyncio.get_running_loop()
+    # redis-py connections are attached to the loop that first performs I/O.
+    # Integration tests intentionally use independent ``asyncio.run()`` loops,
+    # so never hand a client from a closed previous loop to the current one.
+    if _redis is None or _redis_loop is not loop:
         _redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+        _redis_loop = loop
     return _redis
 
 
 async def close_redis() -> None:
     """Close the loop-bound client and let the next lifecycle create a fresh one."""
-    global _redis
-    client, _redis = _redis, None
+    global _redis, _redis_loop
+    client, _redis, _redis_loop = _redis, None, None
     if client is not None:
         try:
             await client.aclose()
