@@ -69,6 +69,9 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          # Do not let the GHA layer cache retain an outdated vulnerable base
+          # image after the upstream ``python:3.11-slim`` tag is refreshed.
+          pull: true
           load: true
           tags: rag-knowledge-base:security-scan
           cache-from: type=gha
