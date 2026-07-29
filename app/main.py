@@ -25,7 +25,7 @@ from app.limiter import limiter
 from app.metrics import HTTP_DURATION, HTTP_REQUESTS, render_metrics
 from app.observability import configure_observability
 from app.routers import admin, auth, chat, documents, kb, stats, tenancy, ws
-from app.services.history import get_redis
+from app.services.history import close_redis, get_redis
 
 # ---- 全链路请求 ID：contextvar 贯穿一次请求的所有日志，排查问题可按 ID 串起来 ----
 request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="-")
@@ -70,6 +70,7 @@ async def lifespan(app: FastAPI):
             await conn.execute(text("SELECT 1"))
     logger.info("数据库初始化完成（auto_create_tables=%s）", settings.auto_create_tables)
     yield
+    await close_redis()
     await async_engine.dispose()
 
 

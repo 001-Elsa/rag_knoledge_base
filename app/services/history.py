@@ -22,6 +22,14 @@ def get_redis() -> aioredis.Redis:
     return _redis
 
 
+async def close_redis() -> None:
+    """Close the loop-bound client and let the next lifecycle create a fresh one."""
+    global _redis
+    if _redis is not None:
+        await _redis.aclose()
+        _redis = None
+
+
 def _key(conversation_id: str) -> str:
     return f"chat:history:{conversation_id}"
 
