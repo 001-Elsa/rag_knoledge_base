@@ -33,7 +33,7 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)  # noqa: UP017 - Python 3.10 compatibility
 
 
-class WorkspaceRole(str, enum.Enum):
+class WorkspaceRole(str, enum.Enum):  # noqa: UP042 - keep Python 3.10 compatibility
     owner = "owner"
     admin = "admin"
     editor = "editor"
@@ -41,7 +41,7 @@ class WorkspaceRole(str, enum.Enum):
     auditor = "auditor"
 
 
-class DocStatus(str, enum.Enum):
+class DocStatus(str, enum.Enum):  # noqa: UP042 - keep Python 3.10 compatibility
     uploaded = "uploaded"
     queued = "queued"
     parsing = "parsing"
@@ -56,14 +56,14 @@ class DocStatus(str, enum.Enum):
     deleted = "deleted"
 
 
-class OutboxStatus(str, enum.Enum):
+class OutboxStatus(str, enum.Enum):  # noqa: UP042 - keep Python 3.10 compatibility
     pending = "pending"
     publishing = "publishing"
     sent = "sent"
     failed = "failed"
 
 
-class DeadLetterStatus(str, enum.Enum):
+class DeadLetterStatus(str, enum.Enum):  # noqa: UP042 - keep Python 3.10 compatibility
     pending = "pending"
     replayed = "replayed"
     discarded = "discarded"

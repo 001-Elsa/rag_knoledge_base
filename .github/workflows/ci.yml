@@ -33,7 +33,9 @@ jobs:
           --health-timeout 3s
           --health-retries 10
       minio:
-        image: bitnami/minio:2024.12.18
+        # Bitnami moved the archived image out of bitnami/minio. Pin the
+        # multi-architecture legacy manifest so CI cannot silently drift.
+        image: bitnamilegacy/minio:2024.12.18@sha256:c0ede65eb88e47138470202c517bacf55ab3c27df848030b7b46e69d34b7d192
         env:
           MINIO_ROOT_USER: minioadmin
           MINIO_ROOT_PASSWORD: minioadmin
