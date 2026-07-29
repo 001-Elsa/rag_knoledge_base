@@ -97,7 +97,9 @@ jobs:
               raise SystemExit("pytest did not produce a JUnit report")
           root = ET.parse(report).getroot()
           for case in root.iter("testcase"):
-              failure = case.find("failure") or case.find("error")
+              failure = case.find("failure")
+              if failure is None:
+                  failure = case.find("error")
               if failure is None:
                   continue
               message = (failure.get("message") or failure.text or "pytest failure").strip()
