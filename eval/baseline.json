@@ -1,0 +1,10 @@
+{
+  "case_count": 10,
+  "retrieval_profile": "hybrid",
+  "hit_rate_at_5": 0.5,
+  "mrr": 0.4,
+  "ndcg_at_5": 0.0,
+  "no_answer_false_positive_rate": 1.0,
+  "p95_retrieval_ms": 5000,
+  "_comment": "Conservative floor baseline for CI offline hybrid retrieval. Replace by measured main-branch report when available; check_quality_gate refuses regressions vs this floor."
+}

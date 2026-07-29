@@ -1,14 +1,22 @@
-"""Reconciliation jobs for crashed workers and superseded index versions."""
+"""Reconciliation, reliable resource deletion, and audit retention jobs."""
 
+import json
+import logging
+import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from sqlalchemy import delete, select, text, update
 
 from app.config import settings
 from app.db import SyncSessionLocal
+from app.metrics import RESOURCE_DELETE_FAILURES
 from app.models import AuditLog, Chunk, DocStatus, Document, OutboxEvent
-from app.services.object_storage import get_object_storage
+from app.services.object_storage import get_object_storage, make_staging_file
 from app.tasks import celery_app
+from app.tasks.ingest import record_dead_letter
+
+logger = logging.getLogger(__name__)
 
 
 def _now() -> datetime:
@@ -17,6 +25,12 @@ def _now() -> datetime:
 
 @celery_app.task(name="reconcile_stale_ingestion")
 def reconcile_stale_ingestion(stale_after_seconds: int = 300) -> dict:
+    """Reclaim documents whose worker lease heartbeat expired.
+
+    Long embedding batches refresh heartbeat_at on each checkpoint, so a live
+    worker is not reclaimed. Only true stalls (crash / network partition) land
+    here and are re-queued through the outbox.
+    """
     cutoff = _now() - timedelta(seconds=stale_after_seconds)
     active = [
         DocStatus.parsing,
@@ -76,6 +90,13 @@ def reconcile_orphan_objects(dry_run: bool = True) -> dict:
     """Delete storage objects absent from DB only after a safety grace period."""
     with SyncSessionLocal() as db:
         referenced = set(db.execute(select(Document.object_key)).scalars())
+        # Objects still referenced by deleting rows (awaiting resource.delete) must
+        # not be treated as orphans until the document row itself is gone.
+        referenced |= set(
+            db.execute(
+                select(Document.object_key).where(Document.status == DocStatus.deleting)
+            ).scalars()
+        )
     cutoff = _now() - timedelta(seconds=settings.orphan_object_grace_seconds)
     storage = get_object_storage()
     orphans = [
@@ -93,11 +114,149 @@ def reconcile_orphan_objects(dry_run: bool = True) -> dict:
     }
 
 
+@celery_app.task(
+    name="delete_resources",
+    bind=True,
+    max_retries=8,
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def delete_resources(self, payload: dict | None = None, **kwargs) -> dict:
+    """Reliably delete object-storage keys after the DB marked rows deleting.
+
+    Flow (item 13):
+      DB marks deleting + writes resource.delete OutboxEvent
+      → dispatcher publishes this task
+      → storage delete succeeds
+      → hard-delete DB row / mark deleted
+
+    Storage failures retry with exponential backoff. Exhausted retries go to DLQ.
+    """
+    payload = payload or kwargs.get("payload") or {}
+    object_keys = list(payload.get("object_keys") or [])
+    document_id = payload.get("document_id")
+    kb_id = payload.get("kb_id")
+    workspace_id = payload.get("workspace_id")
+    max_retries = settings.resource_delete_max_retries
+
+    storage = get_object_storage()
+    try:
+        for key in object_keys:
+            if key:
+                storage.delete(key)
+    except Exception as exc:
+        RESOURCE_DELETE_FAILURES.inc()
+        retries = self.request.retries
+        if retries < max_retries:
+            countdown = min(300, 2 ** (retries + 1) * 5)
+            raise self.retry(exc=exc, countdown=countdown)
+        with SyncSessionLocal() as db:
+            record_dead_letter(
+                db,
+                source="cleanup",
+                task_name="delete_resources",
+                error=str(exc),
+                document_id=document_id,
+                kb_id=kb_id,
+                workspace_id=workspace_id,
+                payload=payload,
+                retry_count=retries,
+            )
+            db.commit()
+        return {"ok": False, "reason": "dead_lettered"}
+
+    with SyncSessionLocal() as db:
+        if document_id:
+            document = db.get(Document, document_id)
+            if document is not None and document.status == DocStatus.deleting:
+                # Soft tombstone then hard delete: status=deleted briefly for audit
+                # visibility, then remove the row (cascades chunks). Object is gone.
+                document.status = DocStatus.deleted
+                document.stage = DocStatus.deleted.value
+                document.finished_at = _now()
+                db.flush()
+                db.delete(document)
+        db.commit()
+    if kb_id:
+        from app.services.semantic_cache import invalidate_kb_sync
+
+        invalidate_kb_sync(kb_id)
+    return {"ok": True, "deleted_keys": len(object_keys)}
+
+
 @celery_app.task(name="purge_expired_audit_logs")
 def purge_expired_audit_logs() -> dict:
+    """Archive then delete audit rows past retention (item 17).
+
+    Archive writes a JSONL blob to object storage before the append-only trigger
+    allows deletion under app.audit_maintenance=on. Operators can re-verify the
+    hash chain on the archive independently of the live table.
+    """
     cutoff = _now() - timedelta(days=settings.audit_retention_days)
+    archived = 0
+    deleted = 0
     with SyncSessionLocal() as db:
+        expired = list(
+            db.execute(
+                select(AuditLog)
+                .where(AuditLog.created_at < cutoff)
+                .order_by(AuditLog.chain_seq.nulls_last(), AuditLog.created_at)
+            ).scalars()
+        )
+        if not expired:
+            return {"deleted": 0, "archived": 0, "retention_days": settings.audit_retention_days}
+
+        if settings.audit_archive_before_purge:
+            lines = []
+            for row in expired:
+                lines.append(
+                    json.dumps(
+                        {
+                            "id": row.id,
+                            "chain_seq": row.chain_seq,
+                            "prev_hash": row.prev_hash,
+                            "entry_hash": row.entry_hash,
+                            "organization_id": row.organization_id,
+                            "workspace_id": row.workspace_id,
+                            "actor_user_id": row.actor_user_id,
+                            "action": row.action,
+                            "resource_type": row.resource_type,
+                            "resource_id": row.resource_id,
+                            "outcome": row.outcome,
+                            "source_ip": row.source_ip,
+                            "request_id": row.request_id,
+                            "trace_id": row.trace_id,
+                            "before": row.before,
+                            "after": row.after,
+                            "created_at": row.created_at.isoformat(),
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+            archive_key = (
+                f"audit-archives/{cutoff.date().isoformat()}/{uuid.uuid4().hex}.jsonl"
+            )
+            staging = make_staging_file(".jsonl")
+            try:
+                Path(staging).write_text("\n".join(lines) + "\n", encoding="utf-8")
+                get_object_storage().put_file(archive_key, staging)
+                archived = len(lines)
+            except Exception:
+                logger.exception("audit archive upload failed; refusing to purge")
+                Path(staging).unlink(missing_ok=True)
+                return {
+                    "deleted": 0,
+                    "archived": 0,
+                    "error": "archive_failed",
+                    "retention_days": settings.audit_retention_days,
+                }
+
         db.execute(text("SELECT set_config('app.audit_maintenance', 'on', true)"))
         result = db.execute(delete(AuditLog).where(AuditLog.created_at < cutoff))
+        deleted = result.rowcount or 0
         db.commit()
-        return {"deleted": result.rowcount or 0, "retention_days": settings.audit_retention_days}
+    return {
+        "deleted": deleted,
+        "archived": archived,
+        "retention_days": settings.audit_retention_days,
+    }

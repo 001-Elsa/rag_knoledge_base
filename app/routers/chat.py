@@ -25,6 +25,7 @@ from app.db import AsyncSessionLocal, get_db
 from app.deps import get_current_user
 from app.limiter import limiter
 from app.metrics import (
+    CITATION_ENTAILMENT_FAILURES,
     CITATION_VALIDATION_FAILURES,
     LLM_FIRST_TOKEN,
     LLM_TOKEN_USAGE,
@@ -39,7 +40,12 @@ from app.services import history as history_svc
 from app.services import semantic_cache, summarizer
 from app.services.agent import run_agent
 from app.services.embedder import embed_query
-from app.services.evidence import assess_evidence, validate_citations
+from app.services.evidence import (
+    apply_injection_policy,
+    assess_evidence,
+    validate_citations,
+    verify_claim_entailment,
+)
 from app.services.llm import expand_queries, rewrite_query, stream_answer, suggest_followups
 from app.services.permissions import get_kb_with_permission
 from app.services.retriever import retrieve
@@ -174,6 +180,7 @@ async def chat(
                             rerank_enabled=body.retrieval_profile == "hybrid_rerank",
                             parent_child_enabled=body.retrieval_profile == "parent_child")
     RETRIEVAL_DURATION.observe(time.perf_counter() - t_retrieval)
+    chunks, injection_info = apply_injection_policy(chunks)
     sources = [_chunk_to_source(c) for c in chunks]
     evidence = assess_evidence(chunks)
 
@@ -183,6 +190,8 @@ async def chat(
             yield _sse("rewrite", {"query": search_query})
         yield _sse("sources", sources)
         yield _sse("evidence", evidence.as_dict())
+        if injection_info.get("high_risk_count"):
+            yield _sse("injection", injection_info)
 
         if not evidence.answerable:
             NO_ANSWER_TOTAL.inc()
@@ -235,6 +244,19 @@ async def chat(
         answer = "".join(answer_parts)
         total_ms = int((time.perf_counter() - t_start) * 1000)
         validation = validate_citations(answer, len(sources))
+        entailment = {"checked": False, "supported": True, "unsupported_claims": []}
+        if validation["valid"] and settings.citation_entailment_enabled:
+            entailment = await verify_claim_entailment(
+                answer, [c.content for c in chunks]
+            )
+            validation = {
+                **validation,
+                "entailment": entailment,
+                "valid": validation["valid"]
+                and (entailment["supported"] if entailment["checked"] else entailment["supported"]),
+            }
+            if entailment.get("checked") and not entailment.get("supported"):
+                CITATION_ENTAILMENT_FAILURES.inc()
         persisted_answer = answer
         if not validation["valid"]:
             CITATION_VALIDATION_FAILURES.inc()
@@ -297,6 +319,18 @@ async def _agent_stream(db: AsyncSession, user: User, body: ChatRequest, conv_id
     answer = "".join(answer_parts)
     total_ms = int((time.perf_counter() - t_start) * 1000)
     validation = validate_citations(answer, len(sources))
+    if validation["valid"] and settings.citation_entailment_enabled and sources:
+        entailment = await verify_claim_entailment(
+            answer, [s["content"] for s in sources]
+        )
+        validation = {
+            **validation,
+            "entailment": entailment,
+            "valid": validation["valid"]
+            and (entailment["supported"] if entailment["checked"] else entailment["supported"]),
+        }
+        if entailment.get("checked") and not entailment.get("supported"):
+            CITATION_ENTAILMENT_FAILURES.inc()
     persisted_answer = answer
     if not validation["valid"]:
         CITATION_VALIDATION_FAILURES.inc()

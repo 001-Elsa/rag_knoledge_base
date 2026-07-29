@@ -12,6 +12,7 @@
   查询用 to_tsquery（OR 连接）+ ts_rank 排序——倒排索引查询，数据量增长不慌。
 """
 import asyncio
+import logging
 import re
 from dataclasses import dataclass
 
@@ -22,6 +23,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models import Chunk, Document, KnowledgeBase, WorkspaceMembership
 from app.services.embedder import embed_query
+
+logger = logging.getLogger(__name__)
 
 # 检索用停用词（简版）
 _STOPWORDS = {"的", "了", "是", "在", "我", "有", "和", "就", "不", "人", "都", "一个",
@@ -92,6 +95,7 @@ async def retrieve(
     filters = [
         WorkspaceMembership.user_id == owner_id,
         Chunk.index_version == Document.active_index_version,
+        Document.quarantined.is_(False),  # 隔离区文档在管理员放行前不参与检索
     ]
     if kb_id:
         filters.append(Chunk.kb_id == kb_id)
@@ -193,9 +197,13 @@ async def retrieve(
         results = unique_parents
 
     # ----（可选）交叉编码器重排：对候选做精排，代价是延迟上升 ----
+    # 重排是增强路径：模型加载/推理失败时降级为 RRF 排序，不让检索整体失败。
     use_reranker = settings.rerank_enabled if rerank_enabled is None else rerank_enabled
     if use_reranker and results:
-        results = await asyncio.to_thread(_cross_encoder_rerank, query, results)
+        try:
+            results = await asyncio.to_thread(_cross_encoder_rerank, query, results)
+        except Exception:
+            logger.warning("交叉编码器重排失败，降级为 RRF 排序", exc_info=True)
 
     return results[: settings.retrieval_top_k]
 

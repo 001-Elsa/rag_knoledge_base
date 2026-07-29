@@ -14,7 +14,7 @@ from app.db import SyncSessionLocal
 from app.metrics import OUTBOX_DISPATCH_FAILURES, OUTBOX_PENDING
 from app.models import DocStatus, Document, OutboxEvent, OutboxStatus
 from app.tasks import celery_app
-from app.tasks.ingest import ingest_document
+from app.tasks.ingest import ingest_document, record_dead_letter
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +72,13 @@ def dispatch_outbox_batch() -> dict:
                     if document and document.status == DocStatus.uploaded:
                         document.status = DocStatus.queued
                         document.stage = DocStatus.queued.value
+                elif event.event_type == "resource.delete.requested":
+                    from app.tasks.maintenance import delete_resources
+
+                    delete_resources.apply_async(
+                        kwargs={"payload": event.payload},
+                        task_id=f"outbox-{event.id}",
+                    )
                 else:
                     raise ValueError(f"unsupported outbox event: {event.event_type}")
                 event.status = OutboxStatus.sent
@@ -89,6 +96,24 @@ def dispatch_outbox_batch() -> dict:
                 event.next_retry_at = _now() + timedelta(
                     seconds=_backoff(event.retry_count)
                 )
+                if event.status == OutboxStatus.failed:
+                    # Retry budget exhausted: park in the dead letter queue so an
+                    # admin can inspect the root cause and replay explicitly.
+                    record_dead_letter(
+                        db,
+                        source="outbox",
+                        task_name=event.event_type,
+                        error=str(exc),
+                        document_id=(
+                            event.aggregate_id
+                            if event.aggregate_type == "document"
+                            else event.payload.get("document_id")
+                        ),
+                        kb_id=event.payload.get("kb_id"),
+                        workspace_id=event.payload.get("workspace_id"),
+                        payload=dict(event.payload) | {"outbox_event_id": event.id},
+                        retry_count=event.retry_count,
+                    )
                 failed += 1
                 OUTBOX_DISPATCH_FAILURES.inc()
                 logger.warning("outbox dispatch failed: %s", event.id, exc_info=True)

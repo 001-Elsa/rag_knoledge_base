@@ -52,6 +52,30 @@ OUTBOX_PENDING = Gauge("outbox_pending_events", "等待或正在投递的 Outbox
 OUTBOX_DISPATCH_FAILURES = Counter(
     "outbox_dispatch_failures_total", "Outbox 投递失败次数"
 )
+DEAD_LETTER_TOTAL = Counter(
+    "dead_letter_tasks_total", "进入死信队列的任务数", ["source"]
+)
+DEAD_LETTER_REPLAYED = Counter(
+    "dead_letter_replayed_total", "管理员重放死信任务次数"
+)
+RESOURCE_DELETE_FAILURES = Counter(
+    "resource_delete_failures_total", "对象存储删除任务失败次数"
+)
+CITATION_ENTAILMENT_FAILURES = Counter(
+    "rag_citation_entailment_failures_total", "Claim-Evidence 语义校验失败次数"
+)
+CITATION_ENTAILMENT_UNAVAILABLE = Counter(
+    "rag_citation_entailment_unavailable_total", "语义校验服务不可用（降级）次数"
+)
+PROMPT_INJECTION_SUSPECTED = Counter(
+    "prompt_injection_suspected_total", "检索/入库中检出的可疑内容次数", ["level"]
+)
+PROMPT_INJECTION_CHUNKS_ACTED = Counter(
+    "prompt_injection_chunks_acted_total", "对可疑切片执行处置的次数", ["action"]
+)
+PROMPT_INJECTION_QUARANTINED = Counter(
+    "prompt_injection_quarantined_total", "入库时被隔离的文档数"
+)
 TENANT_STORAGE_USAGE = Gauge(
     "tenant_storage_usage_bytes", "租户对象存储使用量", ["workspace_id"]
 )

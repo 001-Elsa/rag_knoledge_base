@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     DateTime,
     Enum,
@@ -60,6 +61,12 @@ class OutboxStatus(str, enum.Enum):
     publishing = "publishing"
     sent = "sent"
     failed = "failed"
+
+
+class DeadLetterStatus(str, enum.Enum):
+    pending = "pending"
+    replayed = "replayed"
+    discarded = "discarded"
 
 
 class User(Base):
@@ -178,6 +185,12 @@ class Document(Base):
     embedding_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
     chunk_strategy: Mapped[str] = mapped_column(String(64), default="recursive")
     chunk_config_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Fingerprint of (content_hash, chunk config, embedding model) for the in-flight
+    # target version. Chunk-level checkpoints are reused only when it still matches.
+    pipeline_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Indirect prompt-injection review: quarantined documents stay out of retrieval
+    # until an admin releases them.
+    quarantined: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
@@ -253,6 +266,34 @@ class OutboxEvent(Base):
     )
 
 
+class DeadLetterTask(Base):
+    """Terminal task failures parked for human triage and manual replay.
+
+    Rows are written when an ingestion task exhausts retries, an outbox event exceeds
+    its retry budget, or a background cleanup permanently fails. Admins list, replay,
+    or discard them through /api/admin/dead-letters.
+    """
+
+    __tablename__ = "dead_letter_tasks"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    source: Mapped[str] = mapped_column(String(32), index=True)  # ingest | outbox | cleanup
+    task_name: Mapped[str] = mapped_column(String(128), index=True)
+    document_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    kb_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failed_stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[DeadLetterStatus] = mapped_column(
+        Enum(DeadLetterStatus), default=DeadLetterStatus.pending, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_by: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
 
@@ -271,6 +312,11 @@ class AuditLog(Base):
     after: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
     immutable: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Tamper-evident hash chain, assigned by a database trigger (migration 0008).
+    # NULL in local auto_create_tables mode where triggers are not installed.
+    chain_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    prev_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    entry_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class Conversation(Base):

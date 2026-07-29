@@ -84,3 +84,52 @@ FastAPI → SQLAlchemy → Redis → Celery → parser → embedding → Postgre
 - Redis：不是业务事实来源，但 Broker 中的短期消息可配置 AOF；
 - 恢复顺序：PostgreSQL → 对象存储 → Redis/Worker → API；
 - 恢复后运行 Outbox、处理中任务和对象三类对账。
+
+## 9. 死信队列与按阶段续跑
+
+管理页：<http://localhost:8000/admin>（Owner/Admin）。
+
+1. 入库重试耗尽或 Outbox 超限会写入 `dead_letter_tasks`；
+2. 在管理页或 `POST /api/admin/dead-letters/{id}/replay` 人工重放；
+3. `POST /api/admin/documents/{id}/resume` 可从 `parsing|chunking|embedding|indexing` 续跑；
+4. Embedding 阶段按 batch 写 checkpoint 并刷新 `heartbeat_at`，长期卡住由 `reconcile_stale_ingestion` 回收租约。
+
+## 10. 删除一致性
+
+删除文档/知识库时：事务内标记 `deleting` + 写入 `resource.delete.requested` Outbox，由
+`delete_resources` 可靠删除对象后再硬删行。对象暂时遗留时依赖 orphan 对账，不要手工乱删。
+
+## 11. 审计哈希链
+
+```bash
+python scripts/verify_audit_chain.py
+# 或对导出文件：
+python scripts/verify_audit_chain.py --file audit-export.jsonl
+```
+
+导出：`GET /api/admin/audit-logs/export?workspace_id=...`。过期审计先归档到对象存储再 purge。
+
+## 12. SLO 与错误预算
+
+Prometheus 加载 `monitoring/slo-recording.yml`：
+
+- `rag:api_success_ratio_5m` / `rag:availability_burn_rate_1h`
+- `rag:availability_error_budget_remaining_30d`
+
+告警：
+
+- 1h 燃烧率 > 14x → page
+- 30 天错误预算剩余 < 20% → warning
+
+演练：临时制造 5xx（或断开依赖）观察告警是否在 Grafana/Alertmanager 触发，并在 Runbook 中记录时间线。
+Trace 验证：对一次上传→入库→问答链路，用响应头 `X-Request-ID` / `trace_id` 在 Tempo 中确认
+API→Outbox→Celery→Embedding→LLM 跨服务上下文连续。
+
+## 13. 质量消融与 Agent 对比（需真实运行）
+
+```bash
+python scripts/run_ablation.py --user USER --password PASS
+python scripts/eval_rag_vs_agent.py --user USER --password PASS
+```
+
+报告写入 `eval/reports/`。仓库不预填未经运行的 Hit Rate 提升百分比。

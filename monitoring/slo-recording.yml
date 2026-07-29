@@ -1,0 +1,53 @@
+groups:
+  - name: rag-slo-recording
+    interval: 30s
+    rules:
+      - record: rag:api_success_ratio_5m
+        expr: |
+          1 - (
+            sum(rate(http_requests_total{status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(http_requests_total[5m])), 0.001)
+          )
+
+      - record: rag:first_token_p95_10m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(llm_first_token_seconds_bucket[10m]))
+          )
+
+      - record: rag:availability_slo_target
+        expr: vector(0.99)
+
+      - record: rag:first_token_slo_target_seconds
+        expr: vector(5)
+
+      # Error budget remaining for 30-day availability SLO (99%).
+      # burn_rate > 1 means we are consuming budget faster than the window allows.
+      - record: rag:availability_error_budget_remaining_30d
+        expr: |
+          clamp_max(
+            1 - (
+              (
+                1 - rag:api_success_ratio_5m
+              )
+              /
+              (1 - rag:availability_slo_target)
+            ),
+            1
+          )
+
+      - record: rag:availability_burn_rate_1h
+        expr: |
+          (
+            1 - (
+              1 - (
+                sum(rate(http_requests_total{status=~"5.."}[1h]))
+                /
+                clamp_min(sum(rate(http_requests_total[1h])), 0.001)
+              )
+            )
+          )
+          /
+          clamp_min(1 - rag:availability_slo_target, 0.001)

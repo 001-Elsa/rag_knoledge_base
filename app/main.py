@@ -24,7 +24,7 @@ from app.db import Base, async_engine, sync_engine
 from app.limiter import limiter
 from app.metrics import HTTP_DURATION, HTTP_REQUESTS, render_metrics
 from app.observability import configure_observability
-from app.routers import auth, chat, documents, kb, stats, tenancy, ws
+from app.routers import admin, auth, chat, documents, kb, stats, tenancy, ws
 from app.services.history import get_redis
 
 # ---- 全链路请求 ID：contextvar 贯穿一次请求的所有日志，排查问题可按 ID 串起来 ----
@@ -122,6 +122,7 @@ app.include_router(chat.router)
 app.include_router(stats.router)
 app.include_router(tenancy.router)
 app.include_router(tenancy.organization_router)
+app.include_router(admin.router)
 app.include_router(ws.router)
 
 
@@ -162,3 +163,8 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 @app.get("/", include_in_schema=False)
 async def index():
     return FileResponse("app/static/index.html")
+
+
+@app.get("/admin", include_in_schema=False)
+async def admin_console():
+    return FileResponse("app/static/admin.html")

@@ -76,6 +76,7 @@ class DocumentOut(BaseModel):
     started_at: datetime | None = None
     finished_at: datetime | None = None
     heartbeat_at: datetime | None = None
+    quarantined: bool = False
     error: str | None = None
     created_at: datetime
 
@@ -136,8 +137,41 @@ class AuditLogOut(BaseModel):
     before: dict | None
     after: dict | None
     created_at: datetime
+    chain_seq: int | None = None
+    prev_hash: str | None = None
+    entry_hash: str | None = None
 
     model_config = {"from_attributes": True}
+
+
+class DeadLetterOut(BaseModel):
+    id: str
+    source: str
+    task_name: str
+    document_id: str | None
+    kb_id: str | None
+    workspace_id: str | None
+    payload: dict
+    error: str | None
+    failed_stage: str | None
+    retry_count: int
+    status: str
+    created_at: datetime
+    resolved_at: datetime | None = None
+    resolved_by: str | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class ReplayRequest(BaseModel):
+    from_stage: str | None = None
+
+
+class ResumeFromStageRequest(BaseModel):
+    from_stage: str = Field(
+        default="parsing",
+        pattern="^(parsing|chunking|embedding|indexing)$",
+    )
 
 
 # ---- 对话 ----

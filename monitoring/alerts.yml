@@ -37,3 +37,27 @@ groups:
           severity: warning
         annotations:
           summary: "15 分钟内文档入库失败超过 5 次"
+
+      - alert: RagAvailabilityBudgetBurnFast
+        expr: rag:availability_burn_rate_1h > 14
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "可用性错误预算 1h 燃烧率过高（>14x）"
+
+      - alert: RagAvailabilityBudgetLow
+        expr: rag:availability_error_budget_remaining_30d < 0.2
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "30 天可用性错误预算剩余不足 20%"
+
+      - alert: RagDeadLetterBacklog
+        expr: increase(dead_letter_tasks_total[1h]) > 3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "1 小时内进入死信队列的任务超过 3 个"

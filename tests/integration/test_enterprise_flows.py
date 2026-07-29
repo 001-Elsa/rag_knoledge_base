@@ -150,9 +150,23 @@ def test_dedup_rbac_and_object_cleanup(tmp_path, monkeypatch):
                 await redis_client.lpush(cache_key, "{}")
                 kb = await db.get(KnowledgeBase, kb_id)
                 await delete_knowledge_base(db, kb, owner_id)
-                assert not filepath.exists()
                 assert await db.get(Document, document_id) is None
                 assert await redis_client.exists(cache_key) == 0
+                # Object removal is asynchronous via resource.delete outbox (item 13).
+                from app.models import OutboxEvent
+                from app.tasks import maintenance as maintenance_tasks
+
+                event = (
+                    await db.execute(
+                        select(OutboxEvent).where(
+                            OutboxEvent.event_type == "resource.delete.requested",
+                            OutboxEvent.aggregate_id == kb_id,
+                        )
+                    )
+                ).scalar_one_or_none()
+                if event is not None:
+                    maintenance_tasks.delete_resources.run(payload=event.payload)
+                assert not filepath.exists()
 
                 await db.delete(await db.get(Organization, organization_id))
                 await db.delete(await db.get(User, other_id))

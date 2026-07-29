@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import Document, KnowledgeBase, WorkspaceMembership
+from app.services.evidence import apply_injection_policy
 from app.services.llm import chat_completion
 from app.services.retriever import RetrievedChunk, retrieve
 
@@ -144,6 +145,7 @@ async def _exec_tool(
             if not query:
                 return "错误：query 参数为空"
             chunks = await retrieve(db, owner_id, query, kb_id=kb_id)
+            chunks, _injection = apply_injection_policy(chunks)
             if not chunks:
                 return "没有检索到相关内容，可以换其他关键词再试。"
             lines = []
@@ -166,6 +168,7 @@ async def _exec_tool(
                 .where(
                     WorkspaceMembership.user_id == owner_id,
                     Document.active_index_version.is_not(None),
+                    Document.quarantined.is_(False),
                 )
             )
             if kb_id:

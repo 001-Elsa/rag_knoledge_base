@@ -103,6 +103,18 @@ class Settings(BaseSettings):
     evidence_min_rrf_score: float = 0.012
     prompt_injection_detection_enabled: bool = True
 
+    # ---- 引用语义校验（Claim-Evidence Entailment，额外一次 LLM 调用）----
+    citation_entailment_enabled: bool = False   # 生成后用 LLM 逐条核查事实句是否被引用支持
+    citation_entailment_max_claims: int = 6     # 单次核查的事实句上限（控制成本）
+    citation_entailment_fail_closed: bool = False  # 核查服务不可用时是否拒绝展示回答
+
+    # ---- Prompt Injection 防御 ----
+    injection_high_risk_action: str = "downweight"  # flag=只标记 / downweight=降权 / remove=移除
+    injection_downweight_factor: float = 0.3        # 降权系数（乘在 RRF 分数上并重排）
+    injection_quarantine_enabled: bool = False      # 入库时高危文档自动进入隔离区（需管理员放行）
+    injection_quarantine_ratio: float = 0.5         # 高危切片占比达到该值才隔离整个文档
+    injection_llm_check_enabled: bool = False       # 隔离前用 LLM 做二次确认（需要 LLM Key）
+
     # ---- 限流 ----
     rate_limit_chat: str = "20/minute"
     rate_limit_upload: str = "10/minute"
@@ -123,6 +135,9 @@ class Settings(BaseSettings):
     outbox_base_retry_seconds: int = 2
     orphan_object_grace_seconds: int = 86400
     audit_retention_days: int = 365
+    audit_archive_before_purge: bool = True       # 清理前先把过期审计导出到对象存储
+    ingestion_embed_batch_size: int = 64          # 每嵌入 N 个切片：落盘断点 + 刷新租约心跳
+    resource_delete_max_retries: int = 8          # 对象存储删除任务的最大重试次数
     ingestion_soft_time_limit_seconds: int = 25 * 60
     ingestion_hard_time_limit_seconds: int = 30 * 60
     otel_service_name: str = "rag-api"
