@@ -74,8 +74,10 @@ jobs:
           pull: true
           load: true
           tags: rag-knowledge-base:security-scan
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Security scan must build from scratch every time — cached layers
+          # can ship stale versions of setuptools/msgpack/etc. even after
+          # Dockerfile and requirements.txt have been patched.
+          no-cache: true
       - name: Scan runtime image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:

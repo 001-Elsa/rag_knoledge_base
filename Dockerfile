@@ -18,7 +18,11 @@ RUN if [ -n "$PIP_MIRROR" ]; then \
 RUN pip install --no-cache-dir --upgrade "pip"
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt \
+# --upgrade is essential here: the base image ships old versions of
+# setuptools / msgpack / etc.  Without it pip leaves them untouched even
+# when requirements.txt pins a higher floor.
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir --upgrade -r requirements.txt \
     && pip install --no-cache-dir --upgrade "setuptools>=78" "wheel>=0.46.2"
 
 COPY . .
