@@ -42,7 +42,7 @@ from scripts.check_quality_gate import check_quality
 
 def _vec_for(text: str) -> list[float]:
     """Deterministic pseudo-embedding from text hash (dim = settings.embedding_dim)."""
-    digest = hashlib.sha256(text.encode("utf-8")).digest()
+    digest = hashlib.sha256(text.encode()).digest()
     values = []
     while len(values) < settings.embedding_dim:
         digest = hashlib.sha256(digest).digest()

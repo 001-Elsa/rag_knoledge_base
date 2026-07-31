@@ -29,7 +29,7 @@ def _entry_hash(prev_hash: str, row: dict) -> str:
             str(row["created_at"]),
         ]
     )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 def _json_text(value) -> str:

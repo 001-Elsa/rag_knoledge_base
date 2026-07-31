@@ -629,7 +629,7 @@ def test_outbox_backlog_recovery(tmp_path, monkeypatch):
                     filepath=str(tmp_path / f"backlog_{i}.txt"),
                     object_key=str(tmp_path / f"backlog_{i}.txt"),
                     content_hash=hashlib.sha256(
-                        f"backlog-{i}".encode("utf-8")
+                        f"backlog-{i}".encode()
                     ).hexdigest(),
                 )
                 db.add(document)
