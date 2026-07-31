@@ -30,6 +30,7 @@ from app.models import (
     WorkspaceMembership,
     WorkspaceRole,
 )
+from app.security import hash_password
 from app.services import semantic_cache
 from app.services.permissions import get_kb_with_permission
 from app.services.resource_cleanup import delete_knowledge_base
@@ -57,8 +58,14 @@ def test_00_application_starts_and_health_is_sanitized():
 
 
 async def _tenant(db, suffix: str):
-    owner = User(username=f"integration_owner_{suffix}", password_hash="test")
-    other = User(username=f"integration_other_{suffix}", password_hash="test")
+    owner = User(
+        username=f"integration_owner_{suffix}",
+        password_hash=hash_password("test"),
+    )
+    other = User(
+        username=f"integration_other_{suffix}",
+        password_hash=hash_password("test"),
+    )
     db.add_all([owner, other])
     await db.flush()
     organization = Organization(

@@ -2,8 +2,17 @@ FROM python:3.11-slim
 
 WORKDIR /srv
 
+# Pull OS security patches available after the base image was published.
+# Trivy (ignore-unfixed) fails the security workflow on fixable HIGH/CRITICAL CVEs.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
 # 国内构建提速：换 pip 源（不需要可删掉这行）
 RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+
+# Patch common fixable packaging CVEs shipped with the base image / transitive deps.
+RUN pip install --no-cache-dir --upgrade "pip" "setuptools>=78" "wheel>=0.46.2"
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

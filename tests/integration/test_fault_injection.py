@@ -1,6 +1,7 @@
 """Fault-injection and recovery tests (item 20) plus MinIO / WS coverage (item 19)."""
 
 import asyncio
+import hashlib
 import os
 import sys
 import uuid
@@ -27,6 +28,7 @@ from app.models import (
     WorkspaceMembership,
     WorkspaceRole,
 )
+from app.security import hash_password
 from app.services.object_storage import get_object_storage
 from app.services.resource_cleanup import delete_document, delete_knowledge_base
 from app.tasks import ingest as ingest_tasks
@@ -46,8 +48,8 @@ pytestmark = pytest.mark.integration
 
 
 async def _tenant(db, suffix: str):
-    owner = User(username=f"fault_owner_{suffix}", password_hash="test")
-    other = User(username=f"fault_other_{suffix}", password_hash="test")
+    owner = User(username=f"fault_owner_{suffix}", password_hash=hash_password("test"))
+    other = User(username=f"fault_other_{suffix}", password_hash=hash_password("test"))
     db.add_all([owner, other])
     await db.flush()
     organization = Organization(name=f"fault_org_{suffix}", created_by=owner.id)
@@ -569,13 +571,11 @@ def test_embedding_partial_checkpoint_resume(tmp_path, monkeypatch):
         document = db.get(Document, document_id)
         assert document.status == DocStatus.retrying
         # First batch was committed as checkpoint.
-        chunks_v1 = list(
-            db.execute(
-                select(func.count())
-                .select_from(Chunk)
-                .where(Chunk.document_id == document_id, Chunk.index_version == 1)
-            ).scalars()
-        )
+        chunks_v1 = db.execute(
+            select(func.count())
+            .select_from(Chunk)
+            .where(Chunk.document_id == document_id, Chunk.index_version == 1)
+        ).scalar_one()
         assert chunks_v1 == 1  # one chunk from the first batch
 
         # Re-queue for retry.
@@ -628,7 +628,9 @@ def test_outbox_backlog_recovery(tmp_path, monkeypatch):
                     filename=f"backlog_{i}.txt",
                     filepath=str(tmp_path / f"backlog_{i}.txt"),
                     object_key=str(tmp_path / f"backlog_{i}.txt"),
-                    content_hash=f"b{i}" + "a" * 63,
+                    content_hash=hashlib.sha256(
+                        f"backlog-{i}".encode("utf-8")
+                    ).hexdigest(),
                 )
                 db.add(document)
                 await db.flush()
@@ -761,7 +763,10 @@ def test_sse_chat_streaming_end_to_end():
 
     async def setup():
         async with AsyncSessionLocal() as db:
-            owner = User(username=f"sse_owner_{suffix}", password_hash="test")
+            owner = User(
+                username=f"sse_owner_{suffix}",
+                password_hash=hash_password("test"),
+            )
             db.add(owner)
             await db.flush()
             org = Organization(name=f"sse_org_{suffix}", created_by=owner.id)

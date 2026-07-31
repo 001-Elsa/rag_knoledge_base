@@ -75,6 +75,34 @@ def rrf_fuse(rankings: list[list[str]], k: int = 60) -> dict[str, float]:
     return scores
 
 
+async def _keyword_search(
+    db: AsyncSession,
+    *,
+    filters: list,
+    query: str,
+    limit: int,
+):
+    """PostgreSQL 全文检索关键词召回。抽成独立函数便于故障注入与降级测试。"""
+    tsquery_expr = build_tsquery(extract_keywords(query))
+    if not tsquery_expr:
+        return []
+    tsq = func.to_tsquery("simple", tsquery_expr)
+    rank = func.ts_rank(Chunk.content_tokens, tsq).label("rank")
+    kw_stmt = (
+        select(Chunk, Document.filename, rank)
+        .join(Document, Chunk.document_id == Document.id)
+        .join(KnowledgeBase, KnowledgeBase.id == Chunk.kb_id)
+        .join(
+            WorkspaceMembership,
+            WorkspaceMembership.workspace_id == KnowledgeBase.workspace_id,
+        )
+        .where(*filters, Chunk.content_tokens.op("@@")(tsq))
+        .order_by(rank.desc())
+        .limit(limit)
+    )
+    return (await db.execute(kw_stmt)).all()
+
+
 async def retrieve(
     db: AsyncSession,
     owner_id: str,
@@ -124,26 +152,20 @@ async def retrieve(
         vector_routes.append(await _vector_recall(variant_vec))
 
     # ---- 关键词召回：PostgreSQL 全文检索（tsvector + GIN 倒排索引，ts_rank 排序）----
-    # 只对原查询做（变体是语义级改写，关键词一路用原词更稳）
+    # 只对原查询做（变体是语义级改写，关键词一路用原词更稳）。
+    # 关键词检索是增强路径：失败时降级为纯向量召回，不中断整个问答。
     kw_rows = []
-    tsquery_expr = build_tsquery(extract_keywords(query))
-    if keyword_enabled and tsquery_expr:
-        tsq = func.to_tsquery("simple", tsquery_expr)
-        rank = func.ts_rank(Chunk.content_tokens, tsq).label("rank")
-        kw_stmt = (
-            select(Chunk, Document.filename, rank)
-            .join(Document, Chunk.document_id == Document.id)
-            .join(KnowledgeBase, KnowledgeBase.id == Chunk.kb_id)
-            .join(
-                WorkspaceMembership,
-                WorkspaceMembership.workspace_id == KnowledgeBase.workspace_id,
+    if keyword_enabled:
+        try:
+            kw_rows = await _keyword_search(
+                db,
+                filters=filters,
+                query=query,
+                limit=n,
             )
-            .where(*filters, Chunk.content_tokens.op("@@")(tsq))
-            .order_by(rank.desc())
-            .limit(n)
-        )
-        kw_rows = (await db.execute(kw_stmt)).all()
-
+        except Exception:
+            logger.exception("keyword search failed, degrading to vector-only retrieval")
+            kw_rows = []
     # ---- RRF 融合（所有向量路 + 关键词路）----
     by_id: dict[str, tuple[Chunk, str]] = {}
     for chunk, filename, _ in [row for route in vector_routes for row in route] + list(kw_rows):
