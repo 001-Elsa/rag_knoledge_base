@@ -176,29 +176,54 @@ async def _run() -> dict:
             document.chunk_count += 1
         await db.commit()
 
+        # Warm-up: absorb one-time costs (DB connection, SQL compilation,
+        # full-text search init) before any timing.
+        warm_case = next(
+            (case for case in cases if case.get("answerable")),
+            cases[0],
+        )
+        warm_query_text = (
+            " ".join(warm_case.get("expected_keywords") or [])
+            or warm_case["question"]
+        )
+        await retrieve(
+            db,
+            owner.id,
+            warm_case["question"],
+            kb_id=kb.id,
+            query_vec=_vec_for(warm_query_text),
+            parent_child_enabled=False,
+            rerank_enabled=False,
+        )
+
         hits = 0
         reciprocal_ranks = []
         false_positive_no_answers = 0
         no_answer_cases = 0
         latencies = []
+        import time
+
         for case in cases:
-            # Prefer keyword-heavy query embedding derived from expected keywords /
-            # question so the deterministic vectors stay locally consistent.
             query_text = " ".join(case.get("expected_keywords") or []) or case["question"]
             query_vec = _vec_for(query_text)
-            import time
 
-            t0 = time.perf_counter()
-            results = await retrieve(
-                db,
-                owner.id,
-                case["question"],
-                kb_id=kb.id,
-                query_vec=query_vec,
-                parent_child_enabled=False,
-                rerank_enabled=False,
-            )
-            latencies.append((time.perf_counter() - t0) * 1000)
+            # Measure 3 times and take the median to dampen CI runner jitter.
+            case_latencies: list[float] = []
+            results = []
+            for _ in range(3):
+                t0 = time.perf_counter()
+                results = await retrieve(
+                    db,
+                    owner.id,
+                    case["question"],
+                    kb_id=kb.id,
+                    query_vec=query_vec,
+                    parent_child_enabled=False,
+                    rerank_enabled=False,
+                )
+                case_latencies.append((time.perf_counter() - t0) * 1000)
+
+            latencies.append(statistics.median(case_latencies))
             evidence = assess_evidence(results)
             if case["answerable"]:
                 rank = None
@@ -213,9 +238,10 @@ async def _run() -> dict:
                 false_positive_no_answers += int(evidence.answerable)
 
         answerable_count = max(1, sum(1 for case in cases if case["answerable"]))
-        sorted_latency = sorted(latencies)
-        p95_index = min(
-            len(sorted_latency) - 1, math.ceil(len(sorted_latency) * 0.95) - 1
+        p95_latency = (
+            statistics.quantiles(latencies, n=100, method="inclusive")[94]
+            if len(latencies) >= 2
+            else (latencies[0] if latencies else 0.0)
         )
         report = {
             "case_count": len(cases),
@@ -226,7 +252,7 @@ async def _run() -> dict:
             "no_answer_false_positive_rate": (
                 false_positive_no_answers / no_answer_cases if no_answer_cases else 0.0
             ),
-            "p95_retrieval_ms": sorted_latency[p95_index] if sorted_latency else 0.0,
+            "p95_retrieval_ms": p95_latency,
         }
 
         await db.delete(await db.get(Organization, org.id))
@@ -255,7 +281,21 @@ def main() -> int:
     baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
     failures = check_quality(baseline, report)
     if failures:
-        print("\n".join(f"[FAIL] {f}" for f in failures))
+        metric_summary = (
+            f"current: Hit@5={report['hit_rate_at_5']:.4f}, "
+            f"MRR={report['mrr']:.4f}, "
+            f"No-answer FP={report['no_answer_false_positive_rate']:.4f}, "
+            f"P95={report['p95_retrieval_ms']:.2f}ms; "
+            f"baseline: Hit@5={baseline['hit_rate_at_5']:.4f}, "
+            f"MRR={baseline['mrr']:.4f}, "
+            f"No-answer FP={baseline['no_answer_false_positive_rate']:.4f}, "
+            f"P95={baseline['p95_retrieval_ms']:.2f}ms"
+        )
+        for failure in failures:
+            print(
+                f"::error title=Offline retrieval quality gate::"
+                f"{failure}. {metric_summary}"
+            )
         return 1
     print("[PASS] CI retrieval quality gate")
     return 0
