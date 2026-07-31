@@ -753,11 +753,42 @@ def test_dead_letter_auto_retry_skips_non_retryable(tmp_path):
         db.commit()
 
 
-def test_sse_chat_streaming_end_to_end():
-    """Item 19: SSE streaming produces expected event sequence without crashes."""
+def test_sse_chat_streaming_end_to_end(monkeypatch):
+    """Item 19: SSE streaming produces expected event sequence without crashes.
+
+    All external model calls (embedding, LLM) are mocked so the test
+    exercises the SSE event pipeline deterministically in every
+    environment, including CI where no LLM_API_KEY is configured.
+    """
     from fastapi.testclient import TestClient
 
     from app.main import app
+    from app.routers import chat as chat_router
+
+    # Do not download or run a real embedding model in CI.
+    monkeypatch.setattr(
+        chat_router,
+        "embed_query",
+        lambda _question: [1.0] + [0.0] * (settings.embedding_dim - 1),
+    )
+
+    # Do not call the real DeepSeek API — produce a stable SSE stream.
+    async def fake_stream_answer(*_args, **_kwargs):
+        yield {
+            "type": "delta",
+            "text": "根据知识库，支持七天无理由退货。[1]",
+        }
+        yield {
+            "type": "usage",
+            "prompt_tokens": 10,
+            "completion_tokens": 8,
+        }
+
+    async def fake_suggest_followups(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(chat_router, "stream_answer", fake_stream_answer)
+    monkeypatch.setattr(chat_router, "suggest_followups", fake_suggest_followups)
 
     suffix = uuid.uuid4().hex[:8]
 
@@ -825,42 +856,39 @@ def test_sse_chat_streaming_end_to_end():
     owner_id, org_id, owner_ids, kb_id = asyncio.run(setup())
 
     with TestClient(app) as client:
-        # Login to get access token.
         login_resp = client.post(
             "/api/auth/login",
             json={"username": f"sse_owner_{suffix}", "password": "test"},
         )
-        # Note: login may fail without proper password hashing in test; accept 401/403
-        # as valid failure modes when auth is unavailable.
-        if login_resp.status_code != 200:
-            # Still verify the SSE infrastructure doesn't crash on unauthenticated
-            # requests — it should return 401, not 500.
-            response = client.post(
-                "/api/chat",
-                json={"question": "退货政策是什么？", "mode": "rag", "kb_id": kb_id},
-                headers={"Accept": "text/event-stream"},
-            )
-            assert response.status_code in (401, 403, 422)
-        else:
-            token = login_resp.json()["access_token"]
-            headers = {"Authorization": f"Bearer {token}"}
-            with client.stream(
-                "POST",
-                "/api/chat",
-                json={
-                    "question": "退货政策是什么？",
-                    "mode": "rag",
-                    "kb_id": kb_id,
-                },
-                headers=headers,
-            ) as response:
-                assert response.status_code == 200
-                events_seen = set()
-                for line in response.iter_lines():
-                    if line.startswith("event: "):
-                        events_seen.add(line[7:])
-                # Should at minimum emit 'done' to signal completion.
-                assert "done" in events_seen, f"expected 'done' event, got: {events_seen}"
+        assert login_resp.status_code == 200, (
+            f"login failed ({login_resp.status_code}): {login_resp.text}"
+        )
+
+        token = login_resp.json()["access_token"]
+        headers = {"Authorization": f"Bearer {token}"}
+        with client.stream(
+            "POST",
+            "/api/chat",
+            json={
+                "question": "退货政策是什么？",
+                "mode": "rag",
+                "kb_id": kb_id,
+            },
+            headers=headers,
+        ) as response:
+            assert response.status_code == 200
+
+            events_seen = set()
+            for line in response.iter_lines():
+                if line.startswith("event: "):
+                    events_seen.add(line[7:])
+
+            assert "sources" in events_seen
+            assert "evidence" in events_seen
+            assert "delta" in events_seen
+            assert "validation" in events_seen
+            assert "done" in events_seen
+            assert "error" not in events_seen
 
     # Cleanup.
     with SyncSessionLocal() as db:
