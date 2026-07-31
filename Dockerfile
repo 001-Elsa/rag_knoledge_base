@@ -15,15 +15,17 @@ RUN if [ -n "$PIP_MIRROR" ]; then \
     fi
 
 # Patch common fixable CVEs shipped with the base image / transitive deps.
-RUN pip install --no-cache-dir --upgrade "pip"
+# The base ``python:3.11-slim`` image ships setuptools ~70 and may bundle
+# an older msgpack.  Plain ``pip install --upgrade`` sometimes skips them
+# because they are imported or pinned by pip's own internals.
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir --upgrade --force-reinstall \
+        "setuptools>=78" "wheel>=0.46.2" "msgpack>=1.2.1"
 
 COPY requirements.txt .
-# --upgrade is essential here: the base image ships old versions of
-# setuptools / msgpack / etc.  Without it pip leaves them untouched even
-# when requirements.txt pins a higher floor.
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir --upgrade -r requirements.txt \
-    && pip install --no-cache-dir --upgrade "setuptools>=78" "wheel>=0.46.2"
+RUN pip install --no-cache-dir --upgrade -r requirements.txt \
+    && pip install --no-cache-dir --upgrade \
+        "setuptools>=78" "wheel>=0.46.2" "msgpack>=1.2.1"
 
 COPY . .
 
