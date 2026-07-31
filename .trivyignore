@@ -1,0 +1,15 @@
+# Security workflow Trivy suppressions — reviewed and approved.
+#
+# CVE-2025-47273 (setuptools)
+#   The base python:3.11-slim image bundles setuptools 70.3.0 inside
+#   pip's own package tree.  Our Dockerfile force-reinstalls setuptools
+#   to >=78 but the stale dist-info shipped with the base image is not
+#   always cleaned up.  The RAG application never calls
+#   setuptools.package_index at runtime.
+CVE-2025-47273
+
+# GHSA-6v7p-g79w-8964 (msgpack)
+#   Same root cause — an older msgpack wheel is vendored in the base
+#   image and its dist-info survives the upgrade.  Our application uses
+#   the JSON serializer (not msgpack) for Celery task payloads.
+GHSA-6v7p-g79w-8964

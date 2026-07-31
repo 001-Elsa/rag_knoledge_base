@@ -45,6 +45,7 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
+          trivyignores: .trivyignore
 
   sbom:
     runs-on: ubuntu-latest
@@ -87,6 +88,7 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
+          trivyignores: .trivyignore
       - name: Print Trivy image report
         if: always()
         run: cat trivy-image-report.txt || true
