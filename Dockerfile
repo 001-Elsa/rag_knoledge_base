@@ -8,8 +8,11 @@ RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# 国内构建提速：换 pip 源（不需要可删掉这行）
-RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+# 国内构建提速：设置 ARG PIP_MIRROR=true 使用清华 pip 源
+ARG PIP_MIRROR=
+RUN if [ -n "$PIP_MIRROR" ]; then \
+        pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple; \
+    fi
 
 # Patch common fixable packaging CVEs shipped with the base image / transitive deps.
 RUN pip install --no-cache-dir --upgrade "pip" "setuptools>=78" "wheel>=0.46.2"
