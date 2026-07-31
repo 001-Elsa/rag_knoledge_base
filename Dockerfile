@@ -14,11 +14,12 @@ RUN if [ -n "$PIP_MIRROR" ]; then \
         pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple; \
     fi
 
-# Patch common fixable packaging CVEs shipped with the base image / transitive deps.
-RUN pip install --no-cache-dir --upgrade "pip" "setuptools>=78" "wheel>=0.46.2"
+# Patch common fixable CVEs shipped with the base image / transitive deps.
+RUN pip install --no-cache-dir --upgrade "pip"
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir --upgrade "setuptools>=78" "wheel>=0.46.2"
 
 COPY . .
 
