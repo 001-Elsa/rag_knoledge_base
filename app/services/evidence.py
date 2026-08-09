@@ -317,6 +317,67 @@ def validate_citations(answer: str, source_count: int) -> dict:
     }
 
 
+def repair_citations(answer: str, source_count: int) -> dict:
+    """Keep supported answer lines and discard lines with unusable citations.
+
+    Models occasionally add an uncited introductory or concluding sentence even
+    when every substantive bullet is correctly cited.  Rejecting the entire
+    answer makes a healthy RAG pipeline look broken.  This deterministic repair
+    keeps Markdown structure and lines containing only valid source references,
+    while removing uncited factual prose and lines that reference missing
+    sources.  The repaired answer is validated again by the normal strict gate.
+    """
+    if source_count <= 0:
+        return {
+            "answer": "",
+            "changed": bool(answer.strip()),
+            "removed_lines": [],
+            "validation": validate_citations("", source_count),
+        }
+
+    kept: list[str] = []
+    removed: list[str] = []
+    in_code_fence = False
+    for line in answer.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_code_fence = not in_code_fence
+            # A code fence is formatting, but the enclosed factual code still
+            # needs a citation on its own line and is therefore handled below.
+            kept.append(line)
+            continue
+        if not stripped:
+            kept.append(line)
+            continue
+        if stripped.startswith(("#", ">")) or stripped in {"---", "***", "___"}:
+            kept.append(line)
+            continue
+
+        citations = [int(value) for value in _CITATION.findall(line)]
+        if citations and all(1 <= value <= source_count for value in citations):
+            kept.append(line)
+            continue
+
+        # Very short labels such as "技术栈：" are presentation rather than a
+        # factual claim.  Keep them; all substantive lines remain citation-bound.
+        label = stripped.lstrip("-*+0123456789.、 ")
+        if not in_code_fence and len(label) < 12 and label.endswith((":", "：")):
+            kept.append(line)
+            continue
+        removed.append(stripped[:200])
+
+    repaired = "\n".join(kept).strip()
+    # Remove now-empty fenced blocks left behind by discarded code lines.
+    repaired = re.sub(r"```[^\n]*\n\s*```", "", repaired).strip()
+    validation = validate_citations(repaired, source_count)
+    return {
+        "answer": repaired,
+        "changed": repaired != answer.strip(),
+        "removed_lines": removed[:10],
+        "validation": validation,
+    }
+
+
 def extract_cited_claims(answer: str, source_count: int) -> list[dict]:
     """Factual sentences with their cited source numbers, for entailment checking."""
     claims = []

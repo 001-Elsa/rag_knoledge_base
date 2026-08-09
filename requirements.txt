@@ -25,6 +25,7 @@ bcrypt==4.0.1
 # 配置
 pydantic==2.10.4
 pydantic-settings==2.7.0
+jsonschema>=4.23.0
 setuptools>=78             # security: CVE-2025-47273
 
 # LLM 客户端（OpenAI 兼容协议，指向 DeepSeek）
@@ -33,10 +34,15 @@ openai==1.59.7
 # 文档解析
 pypdf==6.14.2
 python-docx==1.1.2
+openpyxl>=3.1.5
+beautifulsoup4>=4.12.3
+pdfplumber>=0.11.4
+PyMuPDF>=1.25.1
+Pillow>=11.0.0
+pytesseract>=0.3.13
 
 # 检索
 jieba==0.42.1
-rank-bm25==0.2.2
 
 # 本地 Embedding（bge-small-zh-v1.5，首次运行自动下载模型约 100MB）
 sentence-transformers>=3.3.1

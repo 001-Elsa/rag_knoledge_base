@@ -13,7 +13,7 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -24,7 +24,7 @@ from app.db import Base, async_engine, sync_engine
 from app.limiter import limiter
 from app.metrics import HTTP_DURATION, HTTP_REQUESTS, render_metrics
 from app.observability import configure_observability
-from app.routers import admin, auth, chat, documents, kb, stats, tenancy, ws
+from app.routers import admin, auth, chat, documents, imports, kb, stats, system, tenancy, ws
 from app.services.history import close_redis, get_redis
 
 # ---- 全链路请求 ID：contextvar 贯穿一次请求的所有日志，排查问题可按 ID 串起来 ----
@@ -81,6 +81,17 @@ configure_observability(app, [async_engine.sync_engine, sync_engine])
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+
+@app.exception_handler(Exception)
+async def unhandled_exception(request: Request, exc: Exception):
+    """Never send an HTML/plain-text 500 body to API clients."""
+    request_id = getattr(request.state, "request_id", None)
+    logger.exception("未处理异常 request_id=%s", request_id, exc_info=exc)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "服务内部错误，请稍后重试", "request_id": request_id},
+    )
+
 # CORS：仅当配置了白名单才启用（同源部署无需跨域，攻击面最小化）
 if settings.cors_origins:
     from fastapi.middleware.cors import CORSMiddleware
@@ -119,8 +130,10 @@ async def observability(request: Request, call_next):
 app.include_router(auth.router)
 app.include_router(kb.router)
 app.include_router(documents.router)
+app.include_router(imports.router)
 app.include_router(chat.router)
 app.include_router(stats.router)
+app.include_router(system.router)
 app.include_router(tenancy.router)
 app.include_router(tenancy.organization_router)
 app.include_router(admin.router)

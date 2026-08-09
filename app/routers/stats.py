@@ -24,6 +24,7 @@ async def overview(user: User = Depends(get_current_user), db: AsyncSession = De
                 func.coalesce(func.sum(UsageRecord.completion_tokens), 0),
                 func.coalesce(func.avg(UsageRecord.first_token_ms), 0),
                 func.coalesce(func.avg(UsageRecord.total_ms), 0),
+                func.coalesce(func.sum(UsageRecord.estimated_cost_microusd), 0),
             ).where(UsageRecord.owner_id == user.id)
         )
     ).one()
@@ -38,6 +39,7 @@ async def overview(user: User = Depends(get_current_user), db: AsyncSession = De
         completion_tokens=int(usage[2]),
         avg_first_token_ms=int(usage[3]),
         avg_total_ms=int(usage[4]),
+        estimated_cost_usd=round(float(usage[5]) / 1_000_000, 6),
     )
 
 

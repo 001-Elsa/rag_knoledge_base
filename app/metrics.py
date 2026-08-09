@@ -18,6 +18,22 @@ RETRIEVAL_DURATION = Histogram(
     "rag_retrieval_duration_seconds", "混合检索耗时（含查询向量化）",
     buckets=(0.05, 0.1, 0.3, 0.5, 1, 2, 5),
 )
+CONTEXT_BUILD_DURATION = Histogram(
+    "rag_context_build_duration_seconds", "上下文去重、压缩和预算耗时",
+    buckets=(0.001, 0.005, 0.01, 0.03, 0.1, 0.3, 1),
+)
+RERANK_DURATION = Histogram(
+    "rag_rerank_duration_seconds", "重排耗时", ["kind"],
+    buckets=(0.005, 0.01, 0.05, 0.1, 0.3, 1, 3, 10),
+)
+LLM_GENERATION_DURATION = Histogram(
+    "llm_generation_duration_seconds", "LLM 完整生成耗时",
+    buckets=(0.2, 0.5, 1, 2, 3, 5, 10, 30, 60),
+)
+RAG_END_TO_END_DURATION = Histogram(
+    "rag_end_to_end_duration_seconds", "RAG 请求端到端耗时",
+    buckets=(0.2, 0.5, 1, 2, 3, 5, 10, 30, 60),
+)
 LLM_FIRST_TOKEN = Histogram(
     "llm_first_token_seconds", "LLM 首 token 延迟",
     buckets=(0.2, 0.5, 1, 2, 3, 5, 10),
@@ -28,10 +44,20 @@ CITATION_VALIDATION_FAILURES = Counter(
     "rag_citation_validation_failures_total", "回答引用校验失败次数"
 )
 SEMANTIC_CACHE_HITS = Counter("semantic_cache_hits_total", "语义缓存命中次数")
+SEMANTIC_CACHE_LOOKUPS = Counter("semantic_cache_lookups_total", "语义缓存查询次数")
+RAG_QUERY_ROUTES = Counter("rag_query_routes_total", "查询路由次数", ["route", "reason"])
+RAG_FEEDBACK = Counter("rag_answer_feedback_total", "用户答案反馈", ["rating", "reason"])
+RAG_USER_INTERACTIONS = Counter(
+    "rag_user_interactions_total", "用户与答案交互", ["action"]
+)
+CONTEXT_CHUNKS = Histogram(
+    "rag_context_chunks", "最终上下文切片数量", buckets=(1, 2, 3, 5, 8, 13, 21)
+)
 LLM_TOKEN_USAGE = Counter(
     "llm_token_usage_total", "LLM token 用量", ["model", "kind"]
 )
 LLM_FALLBACK_TOTAL = Counter("llm_fallback_total", "备用模型切换次数", ["model"])
+EMBEDDING_CACHE_HITS = Counter("embedding_cache_hits_total", "Embedding 进程缓存命中次数", ["kind"])
 INGESTION_STAGE_DURATION = Histogram(
     "ingestion_stage_duration_seconds",
     "文档入库阶段耗时",
@@ -78,6 +104,12 @@ PROMPT_INJECTION_QUARANTINED = Counter(
 )
 TENANT_STORAGE_USAGE = Gauge(
     "tenant_storage_usage_bytes", "租户对象存储使用量", ["workspace_id"]
+)
+CHAT_CONCURRENCY_ACTIVE = Gauge(
+    "rag_chat_concurrency_active", "当前 API 实例正在处理的流式问答数"
+)
+CHAT_CONCURRENCY_REJECTED = Counter(
+    "rag_chat_concurrency_rejected_total", "并发容量保护拒绝次数", ["scope"]
 )
 
 

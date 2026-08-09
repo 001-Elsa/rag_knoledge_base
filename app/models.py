@@ -20,6 +20,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.schema import FetchedValue
 
 from app.config import settings
 from app.db import Base
@@ -71,15 +72,35 @@ class DeadLetterStatus(str, enum.Enum):  # noqa: UP042 - keep Python 3.10 compat
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (UniqueConstraint("phone", name="uq_users_phone"),)
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
     username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    # Nullable only for accounts created before phone registration became mandatory.
+    # New registrations always provide a canonical mainland China mobile number.
+    phone: Mapped[str | None] = mapped_column(String(11), nullable=True)
     password_hash: Mapped[str] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     knowledge_bases: Mapped[list["KnowledgeBase"]] = relationship(
         back_populates="owner", cascade="all, delete-orphan"
     )
+
+
+class APIKeyCredential(Base):
+    __tablename__ = "api_key_credentials"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    owner_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(100))
+    prefix: Mapped[str] = mapped_column(String(16), index=True)
+    secret_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
 class Organization(Base):
@@ -188,6 +209,13 @@ class Document(Base):
     # Fingerprint of (content_hash, chunk config, embedding model) for the in-flight
     # target version. Chunk-level checkpoints are reused only when it still matches.
     pipeline_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_type: Mapped[str] = mapped_column(String(32), default="upload")
+    source_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    source_metadata: Mapped[dict] = mapped_column(JSON, default=dict)
+    department: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    tags: Mapped[list] = mapped_column(JSON, default=list)
+    language: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    embedding_dim: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Indirect prompt-injection review: quarantined documents stay out of retrieval
     # until an admin releases them.
     quarantined: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -219,6 +247,13 @@ class Chunk(Base):
     seq: Mapped[int] = mapped_column(Integer)
     parent_seq: Mapped[int] = mapped_column(Integer, default=0)
     page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    workspace_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    section: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    content_type: Mapped[str] = mapped_column(String(32), default="text")
+    source_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    token_count: Mapped[int] = mapped_column(Integer, default=0)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     content: Mapped[str] = mapped_column(Text)
     parent_content: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_tokens: Mapped[str | None] = mapped_column(TSVECTOR, nullable=True)
@@ -314,9 +349,9 @@ class AuditLog(Base):
     immutable: Mapped[bool] = mapped_column(Boolean, default=True)
     # Tamper-evident hash chain, assigned by a database trigger (migration 0008).
     # NULL in local auto_create_tables mode where triggers are not installed.
-    chain_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    prev_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    entry_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    chain_seq: Mapped[int | None] = mapped_column(BigInteger, server_default=FetchedValue(), nullable=True)
+    prev_hash: Mapped[str | None] = mapped_column(String(64), server_default=FetchedValue(), nullable=True)
+    entry_hash: Mapped[str | None] = mapped_column(String(64), server_default=FetchedValue(), nullable=True)
 
 
 class Conversation(Base):
@@ -363,6 +398,74 @@ class UsageRecord(Base):
     completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
     first_token_ms: Mapped[int] = mapped_column(Integer, default=0)
     total_ms: Mapped[int] = mapped_column(Integer, default=0)
+    estimated_cost_microusd: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, index=True
+    )
+
+
+class AnswerFeedback(Base):
+    __tablename__ = "answer_feedback"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    owner_id: Mapped[str] = mapped_column(String(32), index=True)
+    conversation_id: Mapped[str] = mapped_column(String(32), index=True)
+    message_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    rating: Mapped[int] = mapped_column(Integer)  # -1 / +1
+    reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    comment: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+
+
+class GraphEntity(Base):
+    __tablename__ = "graph_entities"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    workspace_id: Mapped[str] = mapped_column(String(32), index=True)
+    kb_id: Mapped[str] = mapped_column(String(32), index=True)
+    document_id: Mapped[str] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(255))
+    normalized_name: Mapped[str] = mapped_column(String(255), index=True)
+    entity_type: Mapped[str] = mapped_column(String(32), default="keyword")
+    chunk_id: Mapped[str | None] = mapped_column(
+        ForeignKey("chunks.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "document_id", "normalized_name", "chunk_id", name="uq_graph_entity_document_chunk"
+        ),
+    )
+
+
+class GraphRelation(Base):
+    __tablename__ = "graph_relations"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    workspace_id: Mapped[str] = mapped_column(String(32), index=True)
+    kb_id: Mapped[str] = mapped_column(String(32), index=True)
+    source_entity_id: Mapped[str] = mapped_column(
+        ForeignKey("graph_entities.id", ondelete="CASCADE"), index=True
+    )
+    target_entity_id: Mapped[str] = mapped_column(
+        ForeignKey("graph_entities.id", ondelete="CASCADE"), index=True
+    )
+    relation_type: Mapped[str] = mapped_column(String(64), default="co_occurs")
+    evidence_chunk_id: Mapped[str | None] = mapped_column(
+        ForeignKey("chunks.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    weight: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "source_entity_id",
+            "target_entity_id",
+            "relation_type",
+            "evidence_chunk_id",
+            name="uq_graph_relation_evidence",
+        ),
     )

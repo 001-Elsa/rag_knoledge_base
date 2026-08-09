@@ -39,6 +39,7 @@ def document_event(
     document_id: str,
     status: str,
     *,
+    kb_id: str,
     filename: str = "",
     chunk_count: int = 0,
     error: str | None = None,
@@ -47,6 +48,7 @@ def document_event(
     return {
         "type": "document",
         "document_id": document_id,
+        "kb_id": kb_id,
         "filename": filename,
         "status": status,
         "chunk_count": chunk_count,

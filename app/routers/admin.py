@@ -1,4 +1,4 @@
-"""Admin APIs: dead letters, quarantine, stage resume, audit search/export."""
+"""Admin APIs: dead letters, quarantine, checkpoint-aware restart, audit search/export."""
 
 import uuid
 from datetime import datetime, timezone
@@ -37,8 +37,8 @@ router = APIRouter(prefix="/api/admin", tags=["运维管理"])
 _ADMIN_ROLES = {WorkspaceRole.owner, WorkspaceRole.admin}
 _AUDIT_ROLES = {WorkspaceRole.owner, WorkspaceRole.admin, WorkspaceRole.auditor}
 
-# Stages that may be resumed by re-queueing ingestion. Embedding checkpoints make
-# resume from embedding/indexing cheap when the pipeline fingerprint still matches.
+# Accepted failure-stage labels for operator intent and audit. Re-queued ingestion
+# reparses/rechunks; matching embedding checkpoints make late-stage recovery cheaper.
 _RESUMABLE_STAGES = {
     "parsing",
     "chunking",
@@ -236,7 +236,12 @@ async def resume_from_stage(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """One-click resume from a named ingestion stage (item 12)."""
+    """Re-queue failed ingestion and retain the reported stage as audit metadata.
+
+    The worker intentionally rebuilds parse/chunk output before deciding whether
+    fingerprint-matching embedding checkpoints can be reused. This endpoint does
+    not jump execution directly to ``from_stage``.
+    """
     if body.from_stage not in _RESUMABLE_STAGES:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "不支持的续跑阶段")
     document = await db.get(Document, document_id)

@@ -14,11 +14,21 @@ class Settings(BaseSettings):
     max_upload_mb: int = 20
     max_document_pages: int = 500
     max_uncompressed_mb: int = 100
+    max_spreadsheet_rows: int = 20000
     workspace_storage_quota_mb: int = 10240
     allowed_mime_types: str = (
         "application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,"
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,"
+        "text/csv,text/html,image/png,image/jpeg,image/webp,image/tiff,"
         "text/plain,text/markdown,text/x-markdown,application/octet-stream"
     )
+    ocr_enabled: bool = True
+    ocr_languages: str = "chi_sim+eng"
+    ocr_min_text_chars: int = 40
+    table_extraction_enabled: bool = True
+    external_source_allowed_hosts: str = ""
+    external_source_timeout_seconds: int = 20
+    external_source_max_rows: int = 10000
 
     # ---- 对象存储（local / s3；MinIO 使用 S3 兼容协议）----
     storage_backend: str = "local"
@@ -31,10 +41,15 @@ class Settings(BaseSettings):
 
     # ---- 数据库 ----
     database_url: str = "postgresql+psycopg://rag:ragpass@localhost:5432/ragdb"
+    db_pool_size: int = 20
+    db_max_overflow: int = 40
+    db_pool_timeout_seconds: float = 30.0
+    worker_db_pool_size: int = 10
     # Celery worker 使用同步驱动，与 API 共用同一个 URL
 
     # ---- Redis ----
     redis_url: str = "redis://localhost:6379/0"
+    redis_timeout_seconds: float = 3.0
 
     # ---- JWT（双 Token：短效 Access + 长效 Refresh，Refresh 存 Redis 支持吊销/轮换）----
     jwt_secret: str = ""
@@ -48,6 +63,8 @@ class Settings(BaseSettings):
     llm_model: str = "deepseek-chat"
     llm_temperature: float = 0.3
     llm_max_tokens: int = 2048
+    llm_input_cost_per_million: float = 0.0
+    llm_output_cost_per_million: float = 0.0
     # LLM 容错：超时 / 重试 / 熔断
     llm_timeout_seconds: float = 60.0
     llm_max_retries: int = 1              # 非流式调用失败重试次数
@@ -70,12 +87,15 @@ class Settings(BaseSettings):
     # ---- Embedding（本地模型）----
     embedding_model: str = "BAAI/bge-small-zh-v1.5"
     embedding_dim: int = 512  # bge-small-zh-v1.5 的输出维度
+    embedding_cache_size: int = 10000
     # bge 系列检索查询需加指令前缀，效果更好
     embedding_query_instruction: str = "为这个句子生成表示以用于检索相关文章："
 
     # ---- 切片 ----
     chunk_size: int = 512      # 每片最大字符数
     chunk_overlap: int = 64    # 相邻片重叠字符数
+    chunk_strategy: str = "recursive"  # fixed/paragraph/recursive/section/semantic
+    semantic_chunk_threshold: float = 0.42
 
     # ---- 检索 ----
     retrieval_top_k: int = 5          # 最终送入 LLM 的片段数
@@ -84,6 +104,9 @@ class Settings(BaseSettings):
     rerank_enabled: bool = False      # 交叉编码器重排（需额外下载约 1GB 模型）
     rerank_model: str = "BAAI/bge-reranker-base"
     parent_child_enabled: bool = True
+    graph_retrieval_enabled: bool = True
+    rule_rerank_enabled: bool = True
+    llm_rerank_enabled: bool = False
 
     # ---- 对话 ----
     history_max_turns: int = 6        # 携带进 Prompt 的历史轮数
@@ -91,6 +114,18 @@ class Settings(BaseSettings):
     query_rewrite_enabled: bool = True   # 多轮对话中自动改写省略指代的问题
     suggestions_enabled: bool = True     # 回答后生成推荐追问
     multi_query_enabled: bool = False    # 多查询扩展召回（效果↑ 延迟↑，评估后按需开启）
+    query_clean_enabled: bool = True
+    query_expansion_enabled: bool = True
+    hyde_enabled: bool = False
+    auto_route_enabled: bool = True
+    query_term_dictionary: str = ""
+
+    # ---- 上下文构建 ----
+    context_max_tokens: int = 6000
+    context_compression_enabled: bool = True
+    context_compression_min_chars: int = 900
+    adjacent_chunk_window: int = 1
+    lost_in_middle_enabled: bool = True
 
     # ---- 语义缓存 ----
     semantic_cache_enabled: bool = True
@@ -114,11 +149,15 @@ class Settings(BaseSettings):
     injection_quarantine_enabled: bool = False      # 入库时高危文档自动进入隔离区（需管理员放行）
     injection_quarantine_ratio: float = 0.5         # 高危切片占比达到该值才隔离整个文档
     injection_llm_check_enabled: bool = False       # 隔离前用 LLM 做二次确认（需要 LLM Key）
+    pii_redaction_enabled: bool = True
 
     # ---- 限流 ----
     rate_limit_chat: str = "20/minute"
     rate_limit_upload: str = "10/minute"
-    rate_limit_storage_url: str = ""  # 留空=进程内存；多实例部署配置为 Redis URL
+    rate_limit_storage_url: str = ""  # 留空时复用 REDIS_URL，保证多实例共享计数
+    chat_global_concurrency: int = 32
+    chat_user_concurrency: int = 2
+    chat_slot_lease_seconds: int = 600
 
     # ---- 运维 ----
     auto_create_tables: bool = True   # 本地开发免迁移直接建表；生产用 Alembic 时设为 false
@@ -143,6 +182,7 @@ class Settings(BaseSettings):
     otel_service_name: str = "rag-api"
     otel_exporter_otlp_endpoint: str = ""
     worker_metrics_port: int = 9101
+    worker_concurrency: int = 2
 
 
 @lru_cache

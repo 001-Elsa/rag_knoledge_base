@@ -24,7 +24,13 @@ def get_redis() -> aioredis.Redis:
     # Integration tests intentionally use independent ``asyncio.run()`` loops,
     # so never hand a client from a closed previous loop to the current one.
     if _redis is None or _redis_loop is not loop:
-        _redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+        _redis = aioredis.from_url(
+            settings.redis_url,
+            decode_responses=True,
+            socket_connect_timeout=settings.redis_timeout_seconds,
+            socket_timeout=settings.redis_timeout_seconds,
+            health_check_interval=30,
+        )
         _redis_loop = loop
     return _redis
 

@@ -6,7 +6,7 @@
   # 打开 http://localhost:8089，设置并发用户数（如 50）与孵化速率（如 5/s）开始压测
 
 压哪些接口、为什么：
-  - /api/health   —— 纯框架开销基线（不碰库）
+  - /api/health   —— PostgreSQL + Redis 依赖健康基线（不检查 MinIO/LLM）
   - /api/kbs      —— 带鉴权 + 数据库查询的典型读接口
   - /api/stats/*  —— 聚合查询（较重的读）
   - /api/chat     —— 默认不压（会真实调 LLM 花钱），想压真实链路时取消注释，

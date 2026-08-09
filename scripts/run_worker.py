@@ -18,7 +18,7 @@ def main() -> None:
             "worker",
             "--loglevel=info",
             "--pool=threads",
-            "--concurrency=2",
+            f"--concurrency={max(1, settings.worker_concurrency)}",
         ]
     )
 

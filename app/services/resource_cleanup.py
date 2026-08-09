@@ -48,8 +48,8 @@ async def delete_document(db: AsyncSession, document: Document, owner_id: str) -
         )
     )
     await db.commit()
-    # Cache can be invalidated immediately; retrieval already skips deleting status
-    # via active_index_version / status filters once chunks are gone after worker.
+    # Cache can be invalidated immediately; retrieval excludes deleting/deleted
+    # tombstones even while the cleanup worker has not hard-deleted chunks yet.
     await semantic_cache.invalidate_kb(kb_id)
 
 

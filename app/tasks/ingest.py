@@ -36,12 +36,13 @@ from app.metrics import (
 )
 from app.models import Chunk, DeadLetterTask, DocStatus, Document, KnowledgeBase
 from app.observability import set_trace_attributes
-from app.services.chunker import split_text
+from app.services.chunker import split_segments
 from app.services.embedder import embed_documents
 from app.services.evidence import should_quarantine
+from app.services.graph import rebuild_document_graph
 from app.services.notify import document_event, publish_sync
 from app.services.object_storage import get_object_storage
-from app.services.parser import parse_file
+from app.services.parser import parse_document
 from app.tasks import celery_app
 
 logger = logging.getLogger(__name__)
@@ -64,7 +65,10 @@ def _tokenize(text: str) -> str:
 
 
 def _chunk_config_hash() -> str:
-    value = f"recursive:{settings.chunk_size}:{settings.chunk_overlap}"
+    value = (
+        f"{settings.chunk_strategy}:{settings.chunk_size}:{settings.chunk_overlap}:"
+        f"{settings.semantic_chunk_threshold}"
+    )
     return hashlib.sha256(value.encode()).hexdigest()
 
 
@@ -189,7 +193,12 @@ def ingest_document(self, document_id: str) -> dict:
         )
         publish_sync(
             document.owner_id,
-            document_event(document.id, DocStatus.parsing.value, filename=document.filename),
+            document_event(
+                document.id,
+                DocStatus.parsing.value,
+                kb_id=document.kb_id,
+                filename=document.filename,
+            ),
         )
 
         # Checkpoint resume is only safe while content, chunk config, and embedding
@@ -208,28 +217,36 @@ def ingest_document(self, document_id: str) -> dict:
         try:
             stage_start = time.perf_counter()
             with get_object_storage().materialize(document.object_key) as source_path:
-                segments = parse_file(str(source_path))
+                segments = parse_document(
+                    str(source_path), source_url=document.source_url
+                )
             INGESTION_STAGE_DURATION.labels("parsing").observe(
                 time.perf_counter() - stage_start
             )
-            if not any(text.strip() for text, _ in segments):
+            if not any(segment.text.strip() for segment in segments):
                 raise NonRetryableIngestionError(
-                    "document parser returned no text; scanned PDFs require OCR"
+                    "document parser returned no text"
                 )
 
             document = _set_stage(db, document_id, token, DocStatus.chunking)
             current_stage = DocStatus.chunking.value
             publish_sync(
                 document.owner_id,
-                document_event(document.id, DocStatus.chunking.value, filename=document.filename),
+                document_event(
+                    document.id,
+                    DocStatus.chunking.value,
+                    kb_id=document.kb_id,
+                    filename=document.filename,
+                ),
             )
             stage_start = time.perf_counter()
-            pieces: list[tuple[str, int | None, int, str]] = []
-            for parent_seq, (text, page) in enumerate(segments):
-                for piece in split_text(
-                    text, settings.chunk_size, settings.chunk_overlap
-                ):
-                    pieces.append((piece, page, parent_seq, text))
+            pieces = split_segments(
+                segments,
+                strategy=settings.chunk_strategy,
+                chunk_size=settings.chunk_size,
+                overlap=settings.chunk_overlap,
+                semantic_threshold=settings.semantic_chunk_threshold,
+            )
             INGESTION_STAGE_DURATION.labels("chunking").observe(
                 time.perf_counter() - stage_start
             )
@@ -238,18 +255,26 @@ def ingest_document(self, document_id: str) -> dict:
 
             # Indirect prompt-injection review: quarantine keeps the document out of
             # retrieval until an admin releases it, without blocking ingestion.
-            quarantine = should_quarantine([piece for piece, _, _, _ in pieces])
+            quarantine = should_quarantine([piece.content for piece in pieces])
 
             document = _set_stage(db, document_id, token, DocStatus.embedding)
             current_stage = DocStatus.embedding.value
             publish_sync(
                 document.owner_id,
-                document_event(document.id, DocStatus.embedding.value, filename=document.filename),
+                document_event(
+                    document.id,
+                    DocStatus.embedding.value,
+                    kb_id=document.kb_id,
+                    filename=document.filename,
+                ),
             )
             stage_start = time.perf_counter()
             target_version = document.target_index_version
             if target_version is None:
                 raise RuntimeError("target index version is missing")
+            kb = db.get(KnowledgeBase, document.kb_id)
+            if kb is None:
+                raise NonRetryableIngestionError("knowledge base not found")
 
             # A retry may reuse chunks that a previous attempt already embedded and
             # committed for the same target version (checkpoint resume). Anything
@@ -266,8 +291,8 @@ def ingest_document(self, document_id: str) -> dict:
                 )
                 reusable = {
                     seq
-                    for seq, (piece, _, _, _) in enumerate(pieces)
-                    if existing.get(seq) == piece
+                    for seq, piece in enumerate(pieces)
+                    if existing.get(seq) == piece.content
                 }
             stale_filter = [
                 Chunk.document_id == document.id,
@@ -287,14 +312,14 @@ def ingest_document(self, document_id: str) -> dict:
                 )
 
             pending = [
-                (seq, piece, page, parent_seq, parent_content)
-                for seq, (piece, page, parent_seq, parent_content) in enumerate(pieces)
+                (seq, piece)
+                for seq, piece in enumerate(pieces)
                 if seq not in reusable
             ]
             batch_size = max(1, settings.ingestion_embed_batch_size)
             for start in range(0, len(pending), batch_size):
                 batch = pending[start : start + batch_size]
-                vectors = embed_documents([piece for _, piece, _, _, _ in batch])
+                vectors = embed_documents([piece.content for _, piece in batch])
                 if len(vectors) != len(batch):
                     raise RuntimeError(
                         "embedding provider returned an unexpected vector count"
@@ -304,18 +329,28 @@ def ingest_document(self, document_id: str) -> dict:
                         document_id=document.id,
                         owner_id=document.owner_id,
                         kb_id=document.kb_id,
+                        workspace_id=kb.workspace_id,
                         index_version=target_version,
                         seq=seq,
-                        page=page,
-                        parent_seq=parent_seq,
-                        content=piece,
-                        parent_content=parent_content,
-                        content_tokens=func.to_tsvector("simple", _tokenize(piece)),
+                        page=piece.page,
+                        parent_seq=piece.parent_seq,
+                        section=piece.section,
+                        content_type=piece.content_type,
+                        source_url=piece.source_url,
+                        content=piece.content,
+                        parent_content=piece.parent_content,
+                        token_count=len(_tokenize(piece.content).split()),
+                        metadata_json={
+                            "section": piece.section,
+                            "page": piece.page,
+                            "content_type": piece.content_type,
+                            "department": document.department,
+                            "tags": document.tags,
+                        },
+                        content_tokens=func.to_tsvector("simple", _tokenize(piece.content)),
                         embedding=vector,
                     )
-                    for (seq, piece, page, parent_seq, parent_content), vector in zip(
-                        batch, vectors
-                    )
+                    for (seq, piece), vector in zip(batch, vectors)
                 )
                 # Chunk checkpoint and lease heartbeat commit atomically: a reclaimed
                 # lease rolls the batch back and stops this worker.
@@ -329,7 +364,12 @@ def ingest_document(self, document_id: str) -> dict:
             current_stage = DocStatus.indexing.value
             publish_sync(
                 document.owner_id,
-                document_event(document.id, DocStatus.indexing.value, filename=document.filename),
+                document_event(
+                    document.id,
+                    DocStatus.indexing.value,
+                    kb_id=document.kb_id,
+                    filename=document.filename,
+                ),
             )
             stage_start = time.perf_counter()
             persisted = db.execute(
@@ -344,6 +384,21 @@ def ingest_document(self, document_id: str) -> dict:
                 raise RuntimeError(
                     f"chunk count mismatch before activation: {persisted} != {len(pieces)}"
                 )
+            active_chunks = list(
+                db.execute(
+                    select(Chunk).where(
+                        Chunk.document_id == document.id,
+                        Chunk.index_version == target_version,
+                    )
+                ).scalars()
+            )
+            if settings.graph_retrieval_enabled:
+                rebuild_document_graph(
+                    db,
+                    document=document,
+                    chunks=active_chunks,
+                    workspace_id=kb.workspace_id,
+                )
             switched = db.execute(
                 update(Document)
                 .where(
@@ -357,7 +412,8 @@ def ingest_document(self, document_id: str) -> dict:
                     active_index_version=target_version,
                     target_index_version=None,
                     embedding_model=settings.embedding_model,
-                    chunk_strategy="recursive",
+                    embedding_dim=settings.embedding_dim,
+                    chunk_strategy=settings.chunk_strategy,
                     chunk_config_hash=_chunk_config_hash(),
                     pipeline_fingerprint=None,
                     quarantined=quarantine,
@@ -391,6 +447,7 @@ def ingest_document(self, document_id: str) -> dict:
                 document_event(
                     document.id,
                     DocStatus.ready.value,
+                    kb_id=document.kb_id,
                     filename=document.filename,
                     chunk_count=len(pieces),
                     index_version=target_version,
@@ -464,6 +521,7 @@ def ingest_document(self, document_id: str) -> dict:
                     document_event(
                         document.id,
                         new_status.value,
+                        kb_id=document.kb_id,
                         filename=document.filename,
                         error=document.error,
                         retry_count=document.retry_count,

@@ -68,6 +68,8 @@ async def get_document_with_permission(
     document_id: str,
     user_id: str,
     permission: str = "read",
+    *,
+    lock: bool = False,
 ) -> Document:
     allowed = PERMISSION_ROLES[permission]
     stmt = (
@@ -83,6 +85,8 @@ async def get_document_with_permission(
             WorkspaceMembership.role.in_(allowed),
         )
     )
+    if lock:
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
     document = (await db.execute(stmt)).scalar_one_or_none()
     if document is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "文档不存在")

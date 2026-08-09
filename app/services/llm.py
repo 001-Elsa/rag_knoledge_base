@@ -139,9 +139,24 @@ SUGGEST_PROMPT = """根据这轮问答内容，猜测用户接下来最可能追
 EXPAND_PROMPT = """把用户问题改写成 2 个语义相同但表述不同的检索查询（换用同义词、换角度），
 用于提高检索召回覆盖。只输出 JSON 数组，如 ["查询一","查询二"]。"""
 
+HYDE_PROMPT = """针对用户问题写一段可能出现在权威资料中的简短假设答案，用于 HyDE 语义检索。
+只写事实风格的假设文本，不要声明它是真实答案，不要添加引用，最多 180 字。"""
+
+RERANK_PROMPT = """你是检索重排器。根据问题给候选片段按相关性排序。
+只输出候选编号 JSON 数组，例如 [3,1,2]；不得输出解释。"""
+
 
 def _source_label(c: RetrievedChunk) -> str:
-    return f"{c.filename} 第 {c.page} 页" if c.page else f"{c.filename} 第 {c.seq + 1} 段"
+    parts = [c.filename]
+    if c.page:
+        parts.append(f"第 {c.page} 页")
+    if c.section:
+        parts.append(f"章节: {c.section}")
+    if not c.page and not c.section:
+        parts.append(f"第 {c.seq + 1} 段")
+    if c.source_url:
+        parts.append(f"URL: {c.source_url}")
+    return " · ".join(parts)
 
 
 def build_context(chunks: list[RetrievedChunk]) -> str:
@@ -164,6 +179,9 @@ async def stream_answer(
     chunks: list[RetrievedChunk],
     history: list[dict] | None = None,
     summary: str | None = None,
+    response_format: str = "markdown",
+    response_schema: dict | None = None,
+    knowledge_base_name: str | None = None,
 ) -> AsyncIterator[dict]:
     """流式生成回答（主模型失败时自动切换备用模型）。
 
@@ -177,8 +195,21 @@ async def stream_answer(
         messages.append({"role": "system", "content": f"此前对话的摘要（供理解上下文）：\n{summary}"})
     if history:
         messages.extend(history)
+    format_instruction = ""
+    if response_format == "json":
+        schema = json.dumps(response_schema or {"answer": "string", "citations": [1]}, ensure_ascii=False)
+        format_instruction = (
+            "\n\n只输出合法 JSON，不要 Markdown 代码围栏。输出必须符合这个字段结构: "
+            f"{schema[:1500]}。事实仍需在字符串中用 [n] 引用。"
+        )
+    kb_instruction = (
+        f"已选择知识库：{knowledge_base_name}\n"
+        "只允许根据这个知识库中检索到的文件片段回答。\n\n"
+        if knowledge_base_name
+        else ""
+    )
     messages.append(
-        {"role": "user", "content": f"参考资料：\n{build_context(chunks)}\n\n用户问题：{question}"}
+        {"role": "user", "content": f"{kb_instruction}参考资料：\n{build_context(chunks)}\n\n用户问题：{question}{format_instruction}"}
     )
 
     stream = None
@@ -264,6 +295,55 @@ async def expand_queries(question: str) -> list[str]:
     except Exception:
         logger.warning("多查询扩展失败", exc_info=True)
         return []
+
+
+async def generate_hypothetical_answer(question: str) -> str:
+    """HyDE generation; failure is a safe empty enhancement route."""
+    try:
+        response = await chat_completion(
+            [
+                {"role": "system", "content": HYDE_PROMPT},
+                {"role": "user", "content": question},
+            ],
+            temperature=0.3,
+            max_tokens=220,
+        )
+        return (response.choices[0].message.content or "").strip()[:800]
+    except Exception:
+        logger.warning("HyDE 生成失败", exc_info=True)
+        return ""
+
+
+async def llm_rerank(question: str, candidates: list[RetrievedChunk]) -> list[RetrievedChunk]:
+    if not candidates:
+        return []
+    try:
+        blocks = "\n\n".join(
+            f"[{index}] {candidate.content[:500]}"
+            for index, candidate in enumerate(candidates, start=1)
+        )
+        response = await chat_completion(
+            [
+                {"role": "system", "content": RERANK_PROMPT},
+                {"role": "user", "content": f"问题：{question}\n\n候选：\n{blocks}"},
+            ],
+            temperature=0.0,
+            max_tokens=120,
+        )
+        text = (response.choices[0].message.content or "").strip()
+        order = json.loads(text[text.find("[") : text.rfind("]") + 1])
+        selected = []
+        seen = set()
+        for value in order:
+            index = int(value) - 1
+            if 0 <= index < len(candidates) and index not in seen:
+                selected.append(candidates[index])
+                seen.add(index)
+        selected.extend(c for index, c in enumerate(candidates) if index not in seen)
+        return selected
+    except Exception:
+        logger.warning("LLM 重排失败，保留原排序", exc_info=True)
+        return candidates
 
 
 async def suggest_followups(question: str, answer: str) -> list[str]:

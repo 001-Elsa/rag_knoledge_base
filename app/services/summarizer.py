@@ -12,10 +12,10 @@
 """
 import logging
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from app.config import settings
-from app.db import AsyncSessionLocal
+from app.db import AsyncSessionLocal, set_tenant_context
 from app.models import Conversation, Message
 from app.services.llm import chat_completion
 
@@ -34,10 +34,7 @@ async def maybe_summarize(conversation_id: str, user_id: str) -> None:
         return
     try:
         async with AsyncSessionLocal() as db:
-            await db.execute(
-                text("SELECT set_config('app.user_id', :user_id, true)"),
-                {"user_id": user_id},
-            )
+            await set_tenant_context(db, user_id)
             conv = await db.get(Conversation, conversation_id)
             if conv is None:
                 return

@@ -2,7 +2,9 @@
 
 from fastapi import Request
 
+from app.config import settings
 from app.models import AuditLog
+from app.services.redaction import redact_value
 
 
 def _trace_id() -> str | None:
@@ -45,8 +47,8 @@ def add_audit_event(
             else None
         ),
         trace_id=_trace_id(),
-        before=before,
-        after=after,
+        before=redact_value(before) if settings.pii_redaction_enabled else before,
+        after=redact_value(after) if settings.pii_redaction_enabled else after,
     )
     db.add(event)
     return event

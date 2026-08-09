@@ -4,6 +4,7 @@ import asyncio
 import os
 import sys
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 import pytest
@@ -394,6 +395,31 @@ def test_postgresql_rls_blocks_cross_tenant_rows():
                 ).scalar_one_or_none()
                 is None
             )
+
+        def visible_for(user_id: str) -> tuple[str | None, str | None]:
+            with rls_engine.begin() as connection:
+                connection.execute(
+                    text("SELECT set_config('app.user_id', :user_id, true)"),
+                    {"user_id": user_id},
+                )
+                return (
+                    connection.execute(
+                        text("SELECT id FROM knowledge_bases WHERE id = :id"),
+                        {"id": kb_id},
+                    ).scalar_one_or_none(),
+                    connection.execute(
+                        text("SELECT id FROM conversations WHERE id = :id"),
+                        {"id": conversation_id},
+                    ).scalar_one_or_none(),
+                )
+
+        # Reuse the same connection pool concurrently. A tenant identity leaking
+        # across pooled connections would make at least one of these assertions fail.
+        identities = [owner_id, other_id] * 10
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            results = list(executor.map(visible_for, identities))
+        for identity, result in zip(identities, results):
+            assert result == ((kb_id, conversation_id) if identity == owner_id else (None, None))
     finally:
         rls_engine.dispose()
         with SyncSessionLocal() as db:
@@ -455,6 +481,34 @@ def test_fixed_hybrid_retrieval_regression_fixture(tmp_path):
                     ),
                 ]
             )
+            deleting_document = Document(
+                owner_id=owner.id,
+                kb_id=kb.id,
+                filename="deleting-policy.md",
+                filepath=str(tmp_path / "deleting-policy.md"),
+                object_key=str(tmp_path / "deleting-policy.md"),
+                content_hash="e" * 64,
+                status=DocStatus.deleting,
+                stage=DocStatus.deleting.value,
+                active_index_version=1,
+                chunk_count=1,
+            )
+            db.add(deleting_document)
+            await db.flush()
+            db.add(
+                Chunk(
+                    document_id=deleting_document.id,
+                    owner_id=owner.id,
+                    kb_id=kb.id,
+                    index_version=1,
+                    seq=0,
+                    parent_seq=0,
+                    content="这条删除中的退款规则不得再被检索。",
+                    parent_content="这条删除中的退款规则不得再被检索。",
+                    content_tokens=func.to_tsvector("simple", "退款 期限 删除"),
+                    embedding=refund_vector,
+                )
+            )
             await db.commit()
             results = await retrieve(
                 db,
@@ -467,6 +521,7 @@ def test_fixed_hybrid_retrieval_regression_fixture(tmp_path):
             assert results
             assert results[0].seq == 0
             assert "七日内" in results[0].content
+            assert all(result.document_id != deleting_document.id for result in results)
             await db.delete(await db.get(Organization, organization.id))
             await db.delete(await db.get(User, other.id))
             await db.delete(await db.get(User, owner.id))

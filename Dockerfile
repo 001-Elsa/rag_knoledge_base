@@ -6,6 +6,7 @@ WORKDIR /srv
 # Trivy (ignore-unfixed) fails the security workflow on fixable HIGH/CRITICAL CVEs.
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
 
 # 国内构建提速：设置 ARG PIP_MIRROR=true 使用清华 pip 源

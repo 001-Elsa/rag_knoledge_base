@@ -31,28 +31,40 @@ async def notifications(websocket: WebSocket, ticket: str = ""):
     await websocket.accept()
     pubsub = get_redis().pubsub()
     await pubsub.subscribe(channel_for(user_id))
-    try:
-        while True:
-            # 同时等待：Redis 消息（转发给浏览器）与客户端消息（心跳/断连检测）
-            redis_task = asyncio.create_task(pubsub.get_message(ignore_subscribe_messages=True, timeout=15))
-            client_task = asyncio.create_task(websocket.receive_text())
-            done, pending = await asyncio.wait(
-                {redis_task, client_task}, return_when=asyncio.FIRST_COMPLETED
-            )
-            for task in pending:
-                task.cancel()
 
-            if client_task in done:
-                client_task.result()  # 抛 WebSocketDisconnect 即退出；收到内容视为心跳，忽略
-            if redis_task in done:
-                message = redis_task.result()
-                if message and message.get("type") == "message":
-                    await websocket.send_text(message["data"])
+    async def forward_notifications() -> None:
+        while True:
+            message = await pubsub.get_message(
+                ignore_subscribe_messages=True,
+                timeout=1.0,
+            )
+            if message and message.get("type") == "message":
+                await websocket.send_text(message["data"])
+            else:
+                await asyncio.sleep(0.05)
+
+    async def receive_client_messages() -> None:
+        while True:
+            await websocket.receive_text()
+
+    forward_task = asyncio.create_task(forward_notifications())
+    receive_task = asyncio.create_task(receive_client_messages())
+    try:
+        done, pending = await asyncio.wait(
+            {forward_task, receive_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in done:
+            task.result()
     except WebSocketDisconnect:
         pass
     except Exception:
         logger.warning("WebSocket 异常断开", exc_info=True)
     finally:
+        for task in (forward_task, receive_task):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(forward_task, receive_task, return_exceptions=True)
         try:
             await pubsub.unsubscribe(channel_for(user_id))
             await pubsub.aclose()

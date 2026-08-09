@@ -5,10 +5,13 @@
 1. 数据库提交后，入库任务最终可达且重复投递不产生重复切片；
 2. 索引策略与 RAG 质量可以固定评估、消融比较和回归；
 3. Organization / Workspace / RBAC / PostgreSQL RLS 形成多租户纵深隔离；
-4. API、Celery、数据库、Redis、对象存储和 LLM 链路可追踪、可恢复、可审计。
+4. API、Celery、数据库和 Redis 的关键链路可追踪，异步任务可恢复，业务变更可审计。
 
 技术栈：FastAPI、PostgreSQL 16、pgvector、Redis、Celery、MinIO/S3、OpenTelemetry、
 Prometheus、Grafana、Tempo、DeepSeek/OpenAI-compatible API、Vue 3、Docker Compose。
+
+完整的解析、查询、检索、重排、上下文、评测和安全能力对照见
+[RAG 能力落实矩阵](docs/RAG能力矩阵.md)。
 
 ## 架构
 
@@ -47,7 +50,8 @@ deleting → deleted
 
 Worker 使用 `status + processing_token` 做 CAS 抢占，开启 `acks_late`、worker-lost 重投、软硬超时和
 有限退避重试。Embedding 按 batch 落盘 checkpoint 并刷新租约心跳；Worker 丢失后对账任务回收租约并
-重新入队。重试耗尽进入 `dead_letter_tasks`，管理员可在 `/admin` 人工重放或按阶段续跑。索引写入新的
+重新入队。重试耗尽进入 `dead_letter_tasks`，管理员可在 `/admin` 人工重放；重新入队会从解析开始，
+流水线指纹一致时自动复用已提交的 Embedding checkpoint。索引写入新的
 `index_version`，新切片全部写入成功后才原子更新 `active_index_version`；重建过程中检索继续读取旧版本。
 唯一约束为：
 
@@ -55,7 +59,7 @@ Worker 使用 `status + processing_token` 做 CAS 抢占，开启 `acks_late`、
 UNIQUE(document_id, seq, index_version)
 ```
 
-删除走最终一致性：`deleting` → `resource.delete` Outbox → Worker 可靠删对象 → 硬删行。定时对账任务
+删除走最终一致性：`deleting`（立即退出检索）→ `resource.delete` Outbox → Worker 可靠删对象 → 硬删行。定时对账任务
 负责恢复心跳过期的 Worker、扫描孤儿对象和清理明确指定的旧索引版本。
 
 ### 可测量 RAG
@@ -78,7 +82,8 @@ vector | hybrid | hybrid_rerank | parent_child | multi_query
 
 [固定人工评估集](eval/golden_set.jsonl)覆盖事实、同义改写、编号、跨段对比、权限、无答案和恶意文档。
 评估脚本输出 Hit Rate@5、MRR、nDCG@5、无答案误答率和检索 P95；质量门禁比较当前报告与主分支实测
-基线。CI 额外跑离线 hybrid 检索门禁与 Prompt Injection 发布门禁。仓库不预填未经运行的 X/Y 指标。
+基线。CI 额外跑离线 hybrid 检索门禁与 Prompt Injection 发布门禁。仓库只保留带时间与模型信息的
+实测报告，不填造未经运行的提升数字。
 
 消融与 Agent 对比（需服务已启动且夹具已入库）：
 
@@ -105,22 +110,23 @@ API 层执行 RBAC；数据库层通过 `SET LOCAL app.user_id` 和 PostgreSQL R
 数据库触发器阻止普通 UPDATE/DELETE；INSERT 触发器维护哈希链（`prev_hash` / `entry_hash`）。
 业务接口只能追加；管理员可检索与导出 JSONL，过期记录归档到对象存储后再清理。
 
-运维管理页：<http://localhost:8000/admin>（死信、隔离区、按阶段续跑、审计导出）。
+运维管理页：<http://localhost:8000/admin>（死信、隔离区、checkpoint 感知的重新入队、审计导出）。
 
 浏览器端：
 
 - Refresh Token：`HttpOnly + SameSite` Cookie；
 - Access Token：仅保存在 JavaScript 内存；
-- Refresh Token family：原子轮换、旧 Token 重放时吊销整个 family；
+- Refresh Token family：用 Redis `GETDEL` 原子消费一次性 jti，旧 Token 重放时吊销整个 family；
 - WebSocket：使用 Redis 中一次消费、默认 60 秒有效的 Ticket，不在 URL 中传 Access Token。
 
 Agent 工具均为只读；检索文档被明确标记为不可信数据。容器以 UID 10001 非 root 运行，PostgreSQL、
-Redis、Prometheus、Grafana 和 Flower 不对公网地址暴露；生产 Secret 没有代码内默认值。
+Redis、Prometheus、Grafana 和 Flower 不对公网地址暴露；`.dockerignore` 排除 `.env` 和构建产物，
+生产 Secret 没有代码内默认值。
 
 ### 可观测与运维
 
 - HTTP request_id；
-- OpenTelemetry：FastAPI、SQLAlchemy、Redis、Celery，OTLP 可接 Collector + Tempo；
+- OpenTelemetry：自动埋点 FastAPI、SQLAlchemy、Redis、Celery，OTLP 可接 Collector + Tempo；
 - Prometheus：HTTP、检索、首 Token、缓存、Token、入库阶段、队列延迟、重试、Outbox 堆积；
 - Grafana 数据源：Prometheus + Tempo；
 - SLO 告警示例：5xx 比例、首 Token P95、Outbox 堆积、入库失败；
@@ -129,13 +135,17 @@ Redis、Prometheus、Grafana 和 Flower 不对公网地址暴露；生产 Secret
 
 ## 快速启动
 
-要求 Docker Desktop。先复制配置并替换所有 `change-me`：
+要求 Docker Compose（Windows/macOS 可用 Docker Desktop，Linux 可用 Docker Engine + Compose plugin）。
+先复制配置并替换所有 `change-me`：
 
-```bash
-copy .env.example .env
+```powershell
+Copy-Item .env.example .env
 docker compose up -d --build
 docker compose logs -f api worker beat
 ```
+
+Linux/macOS 使用 `cp .env.example .env`。`/api/health` 只探测 PostgreSQL 和 Redis；MinIO 与 LLM
+需结合容器 healthcheck、日志和实际上传/问答冒烟验证。
 
 应用：<http://localhost:8000>
 
@@ -156,18 +166,12 @@ Flower 属于运维 profile，且必须设置 Basic Auth：
 docker compose --profile ops up -d flower
 ```
 
-已有 0003 数据库升级前，必须先停止写入并回填真实文件哈希：
-
-```bash
-python scripts/backfill_document_hashes.py
-alembic upgrade head
-```
-
-迁移不会为历史文件伪造哈希；发现 NULL 会直接失败并给出操作提示。
+当前迁移头为 `0009`。旧库跨越 `0003 → 0004` 前必须停止写入并回填真实文件哈希；不同起始版本的
+准确顺序见 [升级说明](docs/升级说明.md)。迁移不会为历史文件伪造哈希。
 
 ## 测试与质量门禁
 
-```bash
+```powershell
 ruff check app tests scripts
 pytest -q
 
@@ -186,22 +190,16 @@ pytest tests/integration -q
 - Broker 故障后 Outbox 重试、成功后不重复投递；
 - Celery 重复交付不产生重复切片；
 - 索引 v1 → v2 原子切换，旧版本在切换前后保持可查询；
-- Refresh Token 并发轮换。
+- Refresh Token 一次轮换、旧 Token 重放与 family 吊销。
 
 评估与门禁：
 
-```bash
-python scripts/eval_retrieval.py \
-  --user USER --password PASS \
-  --profile hybrid \
-  --out eval/reports/hybrid.json
-
-python scripts/check_quality_gate.py \
-  --baseline eval/baseline.json \
-  --current eval/reports/hybrid.json
+```powershell
+python scripts/eval_retrieval.py --user USER --password PASS --profile hybrid --out eval/reports/hybrid.json
+python scripts/check_quality_gate.py --baseline eval/baseline.json --current eval/reports/hybrid.json
 
 python scripts/check_injection_gate.py
-python scripts/verify_audit_chain.py
+docker compose exec -T worker python scripts/verify_audit_chain.py
 ```
 
 CI 在真实 PostgreSQL/pgvector、Redis 和 MinIO 上执行迁移、RLS/集成测试、故障注入测试、离线检索
@@ -214,8 +212,10 @@ CI 在真实 PostgreSQL/pgvector、Redis 和 MinIO 上执行迁移、RLS/集成�
 
 - `eval/golden_set.jsonl` 是可复现的最小夹具，不等于业务真实语料的 100～200 条人工集；
 - Claim-Evidence 语义校验默认关闭（需 LLM Key）；开启后仍依赖评审模型质量，不是形式化证明；
-- `eval/reports/` 默认无实测数字；消融表与 RAG vs Agent 对比必须在真实环境跑脚本后才会生成；
+- `eval/reports/ablation_summary.md` 保留了一次本地实测快照，但样本仅 10 条、含冷启动且不代表生产；
+  RAG vs Agent 报告仍需在真实服务和夹具上运行脚本生成；
 - HTTPS Demo、公开压测报告、Grafana/Tempo 截图和云环境故障演练结果需要部署后采集，仓库只提供
   Compose / Runbook / recording rules，不提交伪造运行证据。
 
 详细设计见 [架构设计](docs/架构设计.md)，故障处置见 [运维 Runbook](docs/运维Runbook.md)。
+准备项目面试时，可按 [项目拷打速成计划](docs/面试项目拷打速成计划.md) 结合代码逐日学习与自测。

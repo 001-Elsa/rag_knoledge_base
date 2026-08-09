@@ -77,7 +77,6 @@ async def create_kb(
     except IntegrityError:
         await db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, "同名知识库已存在") from None
-    await db.refresh(kb)
     return KBOut(
         id=kb.id,
         workspace_id=kb.workspace_id,

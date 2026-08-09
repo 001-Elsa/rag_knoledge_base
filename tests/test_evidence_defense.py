@@ -8,6 +8,7 @@ from app.services.evidence import (
     detect_prompt_injection,
     extract_cited_claims,
     injection_risk,
+    repair_citations,
     should_quarantine,
     validate_citations,
 )
@@ -85,6 +86,28 @@ def test_validate_citations_and_claims():
         "根据政策，质量问题商品的退款期限是签收后七天[1]。", 1
     )
     assert claims and claims[0]["citations"] == [1]
+
+
+def test_repair_citations_preserves_supported_content():
+    answer = (
+        "下面是核心技术栈。\n\n"
+        "## 后端\n"
+        "1. FastAPI 提供异步 API。[1]\n"
+        "2. PostgreSQL 保存业务数据。[2]\n"
+        "这是一个没有引用的总结性判断。"
+    )
+    result = repair_citations(answer, 2)
+    assert result["validation"]["valid"]
+    assert result["changed"]
+    assert "FastAPI" in result["answer"]
+    assert "PostgreSQL" in result["answer"]
+    assert "没有引用" not in result["answer"]
+
+
+def test_repair_citations_rejects_missing_sources():
+    result = repair_citations("不存在的来源。[3]", 2)
+    assert not result["validation"]["valid"]
+    assert result["answer"] == ""
 
 
 def test_audit_chain_verifier_detects_break():

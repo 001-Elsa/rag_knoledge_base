@@ -125,12 +125,12 @@
     </section>
 
     <section>
-      <h2>按阶段续跑</h2>
+      <h2>失败任务重新入队</h2>
       <div class="bar">
         <label>Document ID
           <input id="resumeDoc" style="width:16rem" />
         </label>
-        <label>From stage
+        <label>失败阶段（记录用）
           <select id="resumeStage">
             <option>parsing</option>
             <option>chunking</option>
@@ -138,8 +138,9 @@
             <option>indexing</option>
           </select>
         </label>
-        <button type="button" id="resumeBtn">续跑</button>
+        <button type="button" id="resumeBtn">重新入队</button>
       </div>
+      <div class="msg">Worker 会重新解析/切片；流水线指纹一致时复用已提交的 Embedding checkpoint。</div>
       <div id="resumeMsg" class="msg"></div>
     </section>
 
@@ -272,7 +273,7 @@
           method: "POST",
           body: JSON.stringify({ from_stage: $("resumeStage").value }),
         });
-        $("resumeMsg").textContent = `已排队续跑：${data.status} / ${data.stage}`;
+        $("resumeMsg").textContent = `已重新入队：${data.status} / ${data.stage}`;
         $("resumeMsg").classList.remove("err");
       } catch (e) {
         $("resumeMsg").textContent = e.message;

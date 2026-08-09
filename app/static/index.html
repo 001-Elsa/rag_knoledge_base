@@ -54,6 +54,20 @@ body { margin: 0; font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", san
 .nav-bottom { margin-top: auto; display: flex; flex-direction: column; gap: 8px; padding: 8px; }
 .nav-user { display: flex; align-items: center; gap: 8px; color: var(--text-2); font-size: 13px; }
 .content { flex: 1; display: flex; min-width: 0; }
+.profile-card { max-width: 640px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 24px; }
+.profile-row { display: flex; justify-content: space-between; gap: 24px; padding: 16px 0; border-bottom: 1px solid var(--border); }
+.profile-row:last-of-type { border-bottom: 0; }
+.profile-label { color: var(--text-2); font-size: 13px; }
+.profile-value { font-weight: 600; text-align: right; }
+.profile-actions { margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--border); }
+.pipeline-strip { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 22px; }
+.pipeline-step { background: rgba(79,110,247,.10); color: var(--brand); padding: 8px 11px; border-radius: 8px; font-size: 13px; }
+.stack-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin-bottom: 24px; }
+.stack-card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+.stack-tech { font-weight: 650; margin: 7px 0; }
+.stack-purpose { color: var(--text-2); font-size: 13px; line-height: 1.6; }
+.cap-section { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 14px; }
+.cap-section h3 { margin: 0 0 12px; font-size: 15px; }
 
 /* ---------- 对话页 ---------- */
 .conv-panel { width: 250px; border-right: 1px solid var(--border); background: var(--panel);
@@ -65,6 +79,9 @@ body { margin: 0; font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", san
 .conv-item.active { background: rgba(79,110,247,.12); color: var(--brand); }
 .conv-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .chat-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.chat-kb-banner { padding: 10px 8%; border-bottom: 1px solid var(--border); background: var(--panel);
+  color: var(--text-2); font-size: 12px; display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.chat-kb-banner b { color: var(--text-1); }
 .chat-scroll { flex: 1; overflow-y: auto; padding: 28px 8%; }
 .msg-row { display: flex; margin-bottom: 18px; }
 .msg-row.user { justify-content: flex-end; }
@@ -125,8 +142,9 @@ body { margin: 0; font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", san
         <el-tab-pane label="注册" name="register"></el-tab-pane>
       </el-tabs>
       <el-form @submit.prevent>
-        <el-form-item><el-input v-model="authForm.username" placeholder="用户名（至少 3 位）" size="large" /></el-form-item>
-        <el-form-item><el-input v-model="authForm.password" type="password" placeholder="密码（至少 6 位）" size="large" show-password @keyup.enter="doAuth" /></el-form-item>
+        <el-form-item><el-input v-model="authForm.username" placeholder="用户名（至少 3 位）" size="large"></el-input></el-form-item>
+        <el-form-item v-if="authTab==='register'"><el-input v-model="authForm.phone" type="tel" maxlength="17" placeholder="手机号（一个手机号只能注册一个账号）" size="large"></el-input></el-form-item>
+        <el-form-item><el-input ref="passwordInput" v-model="authForm.password" type="password" placeholder="密码（至少 6 位）" size="large" show-password @keyup.enter="doAuth"></el-input></el-form-item>
       </el-form>
       <el-button type="primary" size="large" style="width:100%" :loading="authLoading" @click="doAuth">
         {{ authTab === 'login' ? '登 录' : '注 册' }}
@@ -141,11 +159,12 @@ body { margin: 0; font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", san
       <div class="nav-item" :class="{active: tab==='chat'}" @click="switchTab('chat')"><el-icon><ChatDotRound /></el-icon>对话</div>
       <div class="nav-item" :class="{active: tab==='kb'}" @click="switchTab('kb')"><el-icon><Collection /></el-icon>知识库</div>
       <div class="nav-item" :class="{active: tab==='stats'}" @click="switchTab('stats')"><el-icon><DataAnalysis /></el-icon>用量统计</div>
+      <div class="nav-item" :class="{active: tab==='system'}" @click="switchTab('system')"><el-icon><Cpu /></el-icon>系统能力</div>
+      <div class="nav-item" :class="{active: tab==='profile'}" @click="switchTab('profile')"><el-icon><User /></el-icon>用户中心</div>
       <div class="nav-bottom">
-        <el-switch v-model="dark" active-text="深色" inactive-text="浅色" @change="applyTheme" />
+        <el-switch v-model="dark" active-text="深色" inactive-text="浅色" @change="applyTheme"></el-switch>
         <div class="nav-user">
           <el-icon><User /></el-icon>{{ username }}
-          <el-button link type="danger" size="small" @click="logout">退出</el-button>
         </div>
       </div>
     </nav>
@@ -156,9 +175,8 @@ body { margin: 0; font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", san
       <template v-if="tab==='chat'">
         <div class="conv-panel">
           <el-button type="primary" plain @click="newChat"><el-icon><Plus /></el-icon>&nbsp;新对话</el-button>
-          <el-select v-model="chatKb" placeholder="检索范围" size="small">
-            <el-option :value="''" label="全部知识库" />
-            <el-option v-for="k in kbs" :key="k.id" :value="k.id" :label="k.name" />
+          <el-select v-model="chatKb" placeholder="请选择知识库" size="small" @change="onChatKbChange">
+            <el-option v-for="k in kbs" :key="k.id" :value="k.id" :label="k.name"></el-option>
           </el-select>
           <el-tooltip content="问答模式：改写→检索→生成的固定管道，快。Agent 模式：模型自主多次调用检索工具，适合对比类/复杂问题" placement="right">
             <el-radio-group v-model="chatMode" size="small" style="display:flex">
@@ -176,10 +194,15 @@ body { margin: 0; font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", san
         </div>
 
         <div class="chat-main">
+          <div class="chat-kb-banner">
+            <span v-if="selectedChatKb">当前知识库：<b>{{ selectedChatKb.name }}</b> · {{ selectedChatKb.doc_count }} 个文档</span>
+            <span v-else>请先选择一个知识库</span>
+            <span>回答只读取当前知识库的文件内容，并保留引用来源</span>
+          </div>
           <div class="chat-scroll" ref="chatScroll">
             <div v-if="!messages.length" class="empty-chat">
               <div class="big">📚</div>
-              <p>{{ readyDocCount ? '问点什么吧，回答将基于你的文档并附引用来源' : '先到「知识库」上传文档，再回来提问' }}</p>
+              <p>{{ selectedChatKb && selectedChatReadyDocCount ? '问点什么吧，回答将只基于当前知识库文件并附引用来源' : '先选择知识库并上传文档，再回来提问' }}</p>
             </div>
             <template v-for="(m, i) in messages" :key="i">
               <div class="msg-row" :class="m.role">
@@ -203,10 +226,11 @@ body { margin: 0; font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", san
                         <el-collapse-item :title="'📎 引用来源（' + m.sources.length + ' 个片段）'">
                           <div v-for="(s, j) in m.sources" :key="j" class="src-item">
                             <div class="src-head">
-                              <span>[{{ j+1 }}] {{ s.filename }}{{ s.page ? '（第 ' + s.page + ' 页）' : '（第 ' + (s.seq+1) + ' 段）' }}</span>
+                              <span>[{{ j+1 }}] {{ s.filename }}{{ s.page ? '（第 ' + s.page + ' 页）' : '' }}{{ s.section ? ' · ' + s.section : (!s.page ? '（第 ' + (s.seq+1) + ' 段）' : '') }}</span>
                               <span>score {{ s.score }}</span>
                             </div>
                             <div style="margin-top:4px">{{ s.content.slice(0, 260) }}{{ s.content.length > 260 ? '…' : '' }}</div>
+                            <a v-if="s.source_url && /^https?:\/\//.test(s.source_url)" :href="s.source_url" target="_blank" rel="noopener noreferrer" style="font-size:12px">打开原文</a>
                           </div>
                         </el-collapse-item>
                       </el-collapse>
@@ -217,20 +241,22 @@ body { margin: 0; font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", san
                     <span v-if="m.usage.completion_tokens">🔢 {{ m.usage.prompt_tokens }}+{{ m.usage.completion_tokens }} tokens</span>
                     <el-button link size="small" @click="copyText(m.content)"><el-icon><CopyDocument /></el-icon>复制</el-button>
                     <el-button v-if="i === messages.length - 1 && !streaming" link size="small" @click="regenerate(i)"><el-icon><Refresh /></el-icon>重新生成</el-button>
+                    <el-button v-if="!m.streaming" link size="small" :type="m.feedback===1 ? 'success' : ''" @click="sendFeedback(m, 1)">👍</el-button>
+                    <el-button v-if="!m.streaming" link size="small" :type="m.feedback===-1 ? 'danger' : ''" @click="sendFeedback(m, -1)">👎</el-button>
                   </div>
                 </div>
               </div>
               <div v-if="m.suggestions && m.suggestions.length" class="sugg-row">
-                <el-tag v-for="q in m.suggestions" :key="q" style="cursor:pointer" round effect="plain" type="primary" @click="ask(q)">{{ q }}</el-tag>
+                <el-tag v-for="q in m.suggestions" :key="q" style="cursor:pointer" round effect="plain" type="primary" @click="askSuggestion(q)">{{ q }}</el-tag>
               </div>
             </template>
           </div>
           <div class="input-bar">
             <div class="input-inner">
               <el-input v-model="draft" type="textarea" :autosize="{minRows:1, maxRows:5}" placeholder="输入问题，Enter 发送，Shift+Enter 换行"
-                        @keydown.enter.exact.prevent="ask()" :disabled="streaming" />
+                        @keydown.enter.exact.prevent="ask()" :disabled="streaming || !chatKb"></el-input>
               <el-button v-if="streaming" type="danger" size="large" @click="stopGeneration">■ 停止</el-button>
-              <el-button v-else type="primary" size="large" @click="ask()">发送</el-button>
+              <el-button v-else type="primary" size="large" :disabled="!chatKb" @click="ask()">发送</el-button>
             </div>
             <div class="hint">回答由 DeepSeek 基于知识库检索结果生成，标注 [n] 的内容可在引用来源中核对原文。</div>
           </div>
@@ -241,7 +267,10 @@ body { margin: 0; font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", san
       <div v-else-if="tab==='kb'" class="page">
         <div class="page-head">
           <h2>知识库</h2>
-          <el-button type="primary" @click="kbDialog=true"><el-icon><Plus /></el-icon>&nbsp;新建知识库</el-button>
+          <div>
+            <el-button :disabled="!currentKb" @click="openImportDialog">导入网页 / API / 数据库</el-button>
+            <el-button type="primary" @click="openKbDialog"><el-icon><Plus /></el-icon>&nbsp;新建知识库</el-button>
+          </div>
         </div>
         <div class="kb-grid">
           <div v-for="k in kbs" :key="k.id" class="kb-card" :class="{active: k.id===currentKb}" @click="selectKb(k.id)">
@@ -256,19 +285,20 @@ body { margin: 0; font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", san
 
         <template v-if="currentKb">
           <div class="upload-block">
-            <el-upload drag multiple :show-file-list="false" :http-request="uploadFile" accept=".pdf,.docx,.md,.txt">
+            <el-upload drag multiple :show-file-list="false" :http-request="uploadFile" accept=".pdf,.docx,.xlsx,.xlsm,.csv,.html,.htm,.md,.txt,.png,.jpg,.jpeg,.webp,.tif,.tiff">
               <el-icon style="font-size:40px;color:var(--brand)"><UploadFilled /></el-icon>
               <div>拖拽文件到这里，或 <em style="color:var(--brand)">点击上传</em></div>
-              <div style="font-size:12px;color:var(--text-2);margin-top:6px">支持 PDF / Word / Markdown / TXT，单文件 ≤ 20MB，上传后自动解析入库</div>
+              <div style="font-size:12px;color:var(--text-2);margin-top:6px">支持 PDF / Word / Excel / 网页 / Markdown / TXT / 图片与扫描件，单文件 ≤ 20MB</div>
             </el-upload>
           </div>
           <el-table :data="docs" style="width:100%">
-            <el-table-column prop="filename" label="文件名" min-width="220" />
+            <el-table-column prop="filename" label="文件名" min-width="220"></el-table-column>
             <el-table-column label="状态" width="130">
               <template #default="{row}">
                 <el-tag :type="{ready:'success', failed:'danger', retrying:'warning'}[row.status] || 'info'" size="small">
                   {{ {
                     uploaded:'已上传', queued:'排队中', parsing:'解析中', chunking:'切片中',
+                    uploading:'上传中',
                     embedding:'向量化中', indexing:'建索引中', ready:'✓ 可检索',
                     retrying:'重试中', failed:'失败', cancelled:'已取消',
                     deleting:'删除中', deleted:'已删除'
@@ -276,7 +306,7 @@ body { margin: 0; font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", san
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column prop="chunk_count" label="切片数" width="90" />
+            <el-table-column prop="chunk_count" label="切片数" width="90"></el-table-column>
             <el-table-column label="备注" min-width="160">
               <template #default="{row}"><span style="color:var(--text-2);font-size:12px">{{ row.error || '—' }}</span></template>
             </el-table-column>
@@ -285,22 +315,49 @@ body { margin: 0; font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", san
             </el-table-column>
           </el-table>
         </template>
-        <el-empty v-else description="创建一个知识库开始使用" />
+        <el-empty v-else description="创建一个知识库开始使用"></el-empty>
 
-        <el-dialog v-model="kbDialog" title="新建知识库" width="420px">
+        <el-dialog v-if="kbDialogVisible" v-model="kbDialogVisible" title="新建知识库" width="420px">
           <el-form label-width="70px">
-            <el-form-item label="名称"><el-input v-model="kbForm.name" placeholder="如：产品手册" /></el-form-item>
-            <el-form-item label="描述"><el-input v-model="kbForm.description" placeholder="选填" /></el-form-item>
+            <el-form-item label="名称"><el-input v-model="kbForm.name" placeholder="如：产品手册"></el-input></el-form-item>
+            <el-form-item label="描述"><el-input v-model="kbForm.description" placeholder="选填"></el-input></el-form-item>
           </el-form>
           <template #footer>
-            <el-button @click="kbDialog=false">取消</el-button>
-            <el-button type="primary" @click="createKb">创建</el-button>
+            <el-button @click="kbDialogVisible=false">取消</el-button>
+            <el-button type="primary" @click="createKb" :loading="kbCreating">创建</el-button>
+          </template>
+        </el-dialog>
+
+        <el-dialog v-if="importDialogVisible" v-model="importDialogVisible" title="导入外部数据源" width="560px">
+          <el-form label-width="90px">
+            <el-form-item label="来源类型">
+              <el-select v-model="importForm.source_type" style="width:100%">
+                <el-option value="web" label="网页"></el-option>
+                <el-option value="api" label="HTTP API"></el-option>
+                <el-option value="database" label="PostgreSQL（只读）"></el-option>
+              </el-select>
+            </el-form-item>
+            <el-form-item label="名称"><el-input v-model="importForm.name" placeholder="如：产品官网"></el-input></el-form-item>
+            <el-form-item :label="importForm.source_type==='database' ? '连接 URL' : 'URL'">
+              <el-input v-model="importForm.url" :type="importForm.source_type==='database' ? 'password' : 'text'" show-password></el-input>
+            </el-form-item>
+            <el-form-item v-if="importForm.source_type==='database'" label="只读 SQL">
+              <el-input v-model="importForm.query" type="textarea" :rows="4" placeholder="SELECT ...（仅允许一条 SELECT/WITH）"></el-input>
+            </el-form-item>
+            <el-form-item v-if="importForm.source_type==='api'" label="JSON Path">
+              <el-input v-model="importForm.json_path" placeholder="如：data.items（选填）"></el-input>
+            </el-form-item>
+          </el-form>
+          <div style="font-size:12px;color:var(--text-2)">内网地址默认禁止；可信内网主机需要管理员配置允许列表。数据库凭据不会写入审计日志。</div>
+          <template #footer>
+            <el-button @click="importDialogVisible=false">取消</el-button>
+            <el-button type="primary" :loading="importing" @click="importSource">开始导入</el-button>
           </template>
         </el-dialog>
       </div>
 
       <!-- ======== 统计 ======== -->
-      <div v-else class="page">
+      <div v-else-if="tab==='stats'" class="page">
         <div class="page-head"><h2>用量统计</h2>
           <el-button @click="loadStats" :loading="statsLoading"><el-icon><Refresh /></el-icon>&nbsp;刷新</el-button>
         </div>
@@ -310,10 +367,60 @@ body { margin: 0; font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", san
           <div class="stat-card"><div class="stat-label">累计提问</div><div class="stat-num">{{ fmt(overview.question_count) }}</div></div>
           <div class="stat-card"><div class="stat-label">Token 消耗（入/出）</div><div class="stat-num" style="font-size:20px">{{ fmt(overview.prompt_tokens) }} / {{ fmt(overview.completion_tokens) }}</div></div>
           <div class="stat-card"><div class="stat-label">平均首字延迟</div><div class="stat-num">{{ overview.avg_first_token_ms }}<span style="font-size:14px">ms</span></div></div>
+          <div class="stat-card"><div class="stat-label">估算模型成本</div><div class="stat-num" style="font-size:20px">${{ Number(overview.estimated_cost_usd || 0).toFixed(4) }}</div></div>
         </div>
         <div class="chart-box">
           <div style="font-weight:600;margin-bottom:10px">近 14 天提问与 Token 消耗</div>
           <div id="usageChart"></div>
+        </div>
+      </div>
+
+      <!-- ======== 系统能力与技术栈 ======== -->
+      <div v-else-if="tab==='system'" class="page">
+        <div class="page-head"><h2>系统能力与技术栈</h2><el-button @click="loadSystemInfo">刷新状态</el-button></div>
+        <template v-if="systemInfo">
+          <div class="cap-section">
+            <h3>RAG 核心链路</h3>
+            <div class="pipeline-strip">
+              <template v-for="(step, index) in systemInfo.pipeline" :key="step">
+                <span class="pipeline-step">{{ step }}</span><span v-if="index < systemInfo.pipeline.length-1">→</span>
+              </template>
+            </div>
+          </div>
+          <div class="stack-grid">
+            <div v-for="item in systemInfo.stack" :key="item.layer" class="stack-card">
+              <el-tag size="small">{{ item.layer }}</el-tag>
+              <div class="stack-tech">{{ item.technology }}</div>
+              <div class="stack-purpose">{{ item.purpose }}</div>
+            </div>
+          </div>
+          <div v-for="section in capabilitySections" :key="section.key" class="cap-section">
+            <h3>{{ section.title }}</h3>
+            <el-tag v-for="item in systemInfo[section.key]" :key="item" effect="plain" style="margin:0 8px 8px 0">{{ item }}</el-tag>
+          </div>
+        </template>
+        <el-skeleton v-else :rows="8" animated></el-skeleton>
+      </div>
+
+      <!-- ======== 用户中心 ======== -->
+      <div v-else-if="tab==='profile'" class="page">
+        <div class="page-head"><h2>用户中心</h2></div>
+        <div class="profile-card">
+          <div class="profile-row">
+            <span class="profile-label">用户名</span>
+            <span class="profile-value">{{ userProfile.username || username }}</span>
+          </div>
+          <div class="profile-row">
+            <span class="profile-label">绑定手机号</span>
+            <span class="profile-value">{{ maskedPhone }}</span>
+          </div>
+          <div class="profile-row">
+            <span class="profile-label">注册时间</span>
+            <span class="profile-value">{{ formatDate(userProfile.created_at) }}</span>
+          </div>
+          <div class="profile-actions">
+            <el-button type="danger" plain @click="confirmLogout"><el-icon><SwitchButton /></el-icon>&nbsp;退出登录</el-button>
+          </div>
         </div>
       </div>
 
@@ -343,32 +450,61 @@ const app = createApp({
   data() {
     return {
       // 认证
-      logged: false, authTab: 'login', authForm: { username: '', password: '' }, authLoading: false,
-      accessToken: null,
+      logged: !!localStorage.getItem('rag_access_token'), authTab: 'login', authForm: { username: '', phone: '', password: '' }, authLoading: false, loggingOut: false,
+      accessToken: localStorage.getItem('rag_access_token') || null,
       username: localStorage.getItem('rag_username') || '',
-      // 布局
-      tab: 'chat', dark: localStorage.getItem('rag_dark') === '1',
+      userProfile: { id: '', username: '', phone: null, created_at: null },
+      // 布局 —— 记住上次所在页面
+      tab: localStorage.getItem('rag_tab') || 'chat',
+      dark: localStorage.getItem('rag_dark') === '1',
       // 知识库
-      kbs: [], currentKb: '', docs: [], kbDialog: false, kbForm: { name: '', description: '' },
+      kbs: [], currentKb: '', docs: [], docsLoadVersion: 0, kbDialogVisible: false, kbCreating: false, kbForm: { name: '', description: '' },
+      importDialogVisible: false, importing: false,
+      importForm: { source_type: 'web', name: '', url: '', query: '', json_path: '' },
       // 对话
       conversations: [], conversationId: null, chatKb: '', chatMode: 'rag',
       messages: [], draft: '', streaming: false, abortCtrl: null,
       // 统计
       overview: null, daily: [], statsLoading: false, chart: null,
+      systemInfo: null,
       ws: null,
     };
   },
   computed: {
     readyDocCount() { return this.docs.filter(d => d.status === 'ready').length || this.kbs.reduce((s, k) => s + k.doc_count, 0); },
+    selectedChatKb() { return this.kbs.find(k => k.id === this.chatKb) || null; },
+    selectedChatReadyDocCount() { return this.selectedChatKb?.doc_count || 0; },
+    maskedPhone() {
+      const phone = this.userProfile.phone || '';
+      return phone ? `${phone.slice(0, 3)}****${phone.slice(-4)}` : '未绑定（历史账号）';
+    },
+    capabilitySections() {
+      return [
+        { key: 'ingestion', title: '数据接入与解析' },
+        { key: 'retrieval', title: '检索与重排' },
+        { key: 'generation', title: '生成与可信回答' },
+        { key: 'security', title: '安全与多租户隔离' },
+      ];
+    },
   },
   mounted() {
     this.applyTheme();
-    this.tryRefresh().then(ok => { if (ok) this.bootstrap(); });
+    if (this.accessToken) {
+      // 有本地 token：立即初始化，若已过期 api() 会自动尝试 refresh
+      this.bootstrap();
+    } else {
+      // 无本地 token：尝试用 HttpOnly Cookie 换新
+      this.tryRefresh().then(ok => { if (ok) this.bootstrap(); });
+    }
   },
   methods: {
     fmt(n) { return n >= 10000 ? (n / 10000).toFixed(1) + 'w' : String(n); },
+    formatDate(value) { return value ? new Date(value).toLocaleString('zh-CN') : '—'; },
     renderMd(text) { return DOMPurify.sanitize(marked.parse(text || '')); },
-    copyText(t) { navigator.clipboard.writeText(t); ElementPlus.ElMessage.success('已复制'); },
+    copyText(t) { navigator.clipboard.writeText(t); this.trackInteraction('copy'); ElementPlus.ElMessage.success('已复制'); },
+    trackInteraction(action) {
+      this.api('/api/chat/interactions', { method: 'POST', json: { action, conversation_id: this.conversationId } });
+    },
     applyTheme() {
       document.documentElement.classList.toggle('dark', this.dark);
       document.getElementById('hljs-light').disabled = this.dark;
@@ -387,45 +523,100 @@ const app = createApp({
       return res;
     },
     async tryRefresh() {
+      if (this.loggingOut) return false;
       const res = await fetch('/api/auth/refresh', {
         method: 'POST',
       });
       if (!res.ok) { this.forceLogout(); return false; }
       const data = await res.json();
+      if (this.loggingOut) return false;
       this.accessToken = data.access_token;
+      localStorage.setItem('rag_access_token', data.access_token);
       this.logged = true;
       return true;
     },
     forceLogout() {
       this.accessToken = null;
       this.logged = false;
+      this.userProfile = { id: '', username: '', phone: null, created_at: null };
+      localStorage.removeItem('rag_access_token');
+      localStorage.removeItem('rag_username');
       if (this.ws) { this.ws.onclose = null; this.ws.close(); this.ws = null; }
     },
 
     // ---------- 认证 ----------
     async doAuth() {
+      if (this.authLoading) return;
       this.authLoading = true;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
       try {
+        const authPayload = {
+          username: this.authForm.username,
+          password: this.authForm.password,
+          ...(this.authTab === 'register' ? { phone: this.authForm.phone } : {}),
+        };
         const res = await fetch('/api/auth/' + this.authTab, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(this.authForm),
+          body: JSON.stringify(authPayload),
+          signal: controller.signal,
         });
         const data = await res.json();
         if (!res.ok) return ElementPlus.ElMessage.error(data.detail || '操作失败');
+        if (this.authTab === 'register') {
+          const registeredUsername = data.username || this.authForm.username.trim();
+          this.authTab = 'login';
+          this.authForm = { username: registeredUsername, phone: '', password: '' };
+          ElementPlus.ElMessage.success(data.message || '注册成功，请登录');
+          this.$nextTick(() => this.$refs.passwordInput?.focus());
+          return;
+        }
         this.accessToken = data.access_token;
+        localStorage.setItem('rag_access_token', data.access_token);
         localStorage.setItem('rag_username', this.authForm.username);
         this.username = this.authForm.username;
+        this.loggingOut = false;
         this.logged = true;
         this.bootstrap();
-      } finally { this.authLoading = false; }
+      } catch (error) {
+        const message = error?.name === 'AbortError'
+          ? '请求超时，请检查服务状态后重试'
+          : '网络异常，请稍后重试';
+        ElementPlus.ElMessage.error(message);
+      } finally {
+        clearTimeout(timeoutId);
+        this.authLoading = false;
+      }
     },
     async logout() {
-      await fetch('/api/auth/logout', { method: 'POST' });
+      this.loggingOut = true;
+      // 服务端撤销 Refresh Token 尽力执行，但网络异常绝不能阻止本地退出。
+      const revokeRequest = fetch('/api/auth/logout', { method: 'POST' }).catch(() => null);
+      this.authTab = 'login';
+      this.authForm = { username: '', phone: '', password: '' };
+      this.username = '';
+      this.tab = 'chat';
+      localStorage.removeItem('rag_tab');
       this.forceLogout();
+      await this.$nextTick();
+      await revokeRequest;
+    },
+    async confirmLogout() {
+      try {
+        await ElementPlus.ElMessageBox.confirm('确定要退出当前账号吗？', '退出登录', {
+          confirmButtonText: '确认退出', cancelButtonText: '取消', type: 'warning',
+        });
+      } catch { return; }
+      await this.logout();
     },
     async bootstrap() {
       const me = await this.api('/api/auth/me');
-      if (me.ok) { const u = await me.json(); this.username = u.username; localStorage.setItem('rag_username', u.username); }
+      if (me.ok) {
+        const u = await me.json();
+        this.userProfile = u;
+        this.username = u.username;
+        localStorage.setItem('rag_username', u.username);
+      }
       await this.loadKbs();
       await this.loadConversations();
       this.connectWs();
@@ -442,6 +633,8 @@ const app = createApp({
       this.ws.onmessage = (e) => {
         const msg = JSON.parse(e.data);
         if (msg.type !== 'document') return;
+        // 文档状态通知必须属于当前知识库；切换知识库后绝不更新另一库的表格。
+        if (!msg.kb_id || msg.kb_id !== this.currentKb) return;
         const doc = this.docs.find(d => d.id === msg.document_id);
         if (doc) { doc.status = msg.status; doc.chunk_count = msg.chunk_count; doc.error = msg.error; }
         if (msg.status === 'ready') {
@@ -460,14 +653,53 @@ const app = createApp({
       if (!res.ok) return;
       this.kbs = await res.json();
       if (!this.currentKb && this.kbs.length) this.selectKb(this.kbs[0].id);
+      if (!this.kbs.some(k => k.id === this.chatKb)) {
+        this.chatKb = this.kbs[0]?.id || '';
+        this.newChat();
+      }
+    },
+    openKbDialog() {
+      this.kbForm = { name: '', description: '' };
+      this.kbDialogVisible = true;
     },
     async createKb() {
       if (!this.kbForm.name.trim()) return ElementPlus.ElMessage.warning('请填写名称');
-      const res = await this.api('/api/kbs', { method: 'POST', json: this.kbForm });
-      const data = await res.json();
-      if (!res.ok) return ElementPlus.ElMessage.error(data.detail || '创建失败');
-      this.kbDialog = false; this.kbForm = { name: '', description: '' };
-      await this.loadKbs(); this.selectKb(data.id);
+      if (this.kbCreating) return;
+      this.kbCreating = true;
+      try {
+        const res = await this.api('/api/kbs', { method: 'POST', json: this.kbForm });
+        const data = await res.json();
+        if (!res.ok) { ElementPlus.ElMessage.error(data.detail || '创建失败'); return; }
+        // 先卸载弹窗，再刷新列表并选中新知识库。
+        this.kbDialogVisible = false;
+        await this.$nextTick();
+        this.currentKb = data.id;
+        await this.loadKbs();
+        await this.selectKb(data.id);
+      } finally {
+        this.kbCreating = false;
+      }
+    },
+    openImportDialog() {
+      if (!this.currentKb) return ElementPlus.ElMessage.warning('请先选择知识库');
+      this.importForm = { source_type: 'web', name: '', url: '', query: '', json_path: '' };
+      this.importDialogVisible = true;
+    },
+    async importSource() {
+      if (!this.importForm.name.trim() || !this.importForm.url.trim()) return ElementPlus.ElMessage.warning('请填写名称和 URL');
+      const importKbId = this.currentKb;
+      this.importing = true;
+      try {
+        const res = await this.api('/api/imports', {
+          method: 'POST',
+          json: { kb_id: importKbId, ...this.importForm },
+        });
+        const data = await res.json();
+        if (!res.ok) return ElementPlus.ElMessage.error(data.detail || '导入失败');
+        this.importDialogVisible = false;
+        if (this.currentKb === importKbId && data.kb_id === importKbId) this.docs.unshift(data);
+        ElementPlus.ElMessage.success('已提交解析入库');
+      } finally { this.importing = false; }
     },
     async deleteKb(k) {
       await ElementPlus.ElMessageBox.confirm(`删除知识库「${k.name}」及其全部文档与向量数据？`, '确认删除', { type: 'warning' });
@@ -476,21 +708,51 @@ const app = createApp({
       this.loadKbs();
     },
     async selectKb(id) {
+      const loadVersion = ++this.docsLoadVersion;
       this.currentKb = id;
-      const res = await this.api('/api/documents?kb_id=' + id);
-      if (res.ok) this.docs = await res.json();
+      this.docs = [];
+      const res = await this.api('/api/documents?kb_id=' + encodeURIComponent(id));
+      if (!res.ok) return;
+      const rows = await res.json();
+      // 防止快速切换 A→B 时，较慢返回的 A 请求覆盖 B 的文档表格。
+      if (this.currentKb === id && this.docsLoadVersion === loadVersion) {
+        this.docs = rows.filter(document => document.kb_id === id);
+      }
     },
     async uploadFile({ file }) {
+      const uploadKbId = this.currentKb;
+      if (!uploadKbId) return ElementPlus.ElMessage.warning('请先选择知识库');
+      const pendingId = `uploading:${file.uid || Date.now()}:${Math.random()}`;
+      const pendingDocument = {
+        id: pendingId, kb_id: uploadKbId, filename: file.name,
+        status: 'uploading', stage: 'uploading', chunk_count: 0,
+        error: '正在上传…', _pending: true,
+      };
+      // 用户选中文件后立即显示，不等待网络上传和服务端落库完成。
+      if (this.currentKb === uploadKbId) this.docs.unshift(pendingDocument);
       const form = new FormData();
       form.append('file', file);
-      form.append('kb_id', this.currentKb);
+      form.append('kb_id', uploadKbId);
       const res = await this.api('/api/documents', { method: 'POST', body: form });
       const data = await res.json();
-      if (!res.ok) return ElementPlus.ElMessage.error(data.detail || '上传失败');
+      if (!res.ok) {
+        if (this.currentKb === uploadKbId) this.docs = this.docs.filter(d => d.id !== pendingId);
+        return ElementPlus.ElMessage.error(data.detail || '上传失败');
+      }
+      if (data.kb_id !== uploadKbId) {
+        if (this.currentKb === uploadKbId) this.docs = this.docs.filter(d => d.id !== pendingId);
+        return ElementPlus.ElMessage.error('上传结果所属知识库异常，已停止显示');
+      }
+      if (this.currentKb === uploadKbId) {
+        const pendingIndex = this.docs.findIndex(d => d.id === pendingId);
+        if (pendingIndex >= 0) this.docs.splice(pendingIndex, 1, data);
+      }
       ElementPlus.ElMessage.success('已提交处理：' + file.name);
-      this.docs.unshift(data);
+      this.loadKbs();
     },
     async deleteDoc(row) {
+      if (row._pending) return ElementPlus.ElMessage.warning('文件仍在上传，请稍候');
+      if (row.kb_id !== this.currentKb) return ElementPlus.ElMessage.error('文档不属于当前知识库');
       await ElementPlus.ElMessageBox.confirm(`删除文档「${row.filename}」？`, '确认删除', { type: 'warning' });
       await this.api('/api/documents/' + row.id, { method: 'DELETE' });
       this.docs = this.docs.filter(d => d.id !== row.id);
@@ -498,8 +760,19 @@ const app = createApp({
     },
 
     // ---------- 对话 ----------
-    switchTab(t) { this.tab = t; if (t === 'stats') this.loadStats(); },
+    switchTab(t) {
+      this.tab = t;
+      localStorage.setItem('rag_tab', t);
+      if (t === 'stats') this.loadStats();
+      if (t === 'system') this.loadSystemInfo();
+    },
     newChat() { this.conversationId = null; this.messages = []; },
+    onChatKbChange() {
+      if (this.conversationId || this.messages.length) {
+        this.newChat();
+        ElementPlus.ElMessage.info('已切换知识库，并为你开启新对话');
+      }
+    },
     async loadConversations() {
       const res = await this.api('/api/chat/conversations');
       if (res.ok) this.conversations = await res.json();
@@ -511,7 +784,7 @@ const app = createApp({
       if (!res.ok) return;
       const rows = await res.json();
       this.messages = rows.map(r => ({
-        role: r.role, content: r.content,
+        id: r.id, role: r.role, content: r.content,
         sources: r.sources ? JSON.parse(r.sources) : [],
         streaming: false,
       }));
@@ -529,12 +802,24 @@ const app = createApp({
       const res = await this.api('/api/chat/conversations/' + c.id, { method: 'PATCH', json: { title: value.trim() } });
       if (res.ok) this.loadConversations();
     },
+    async sendFeedback(message, rating) {
+      if (!this.conversationId || message.feedback === rating) return;
+      const res = await this.api('/api/chat/feedback', {
+        method: 'POST',
+        json: { conversation_id: this.conversationId, message_id: message.id || null, rating },
+      });
+      if (!res.ok) return ElementPlus.ElMessage.error('反馈提交失败');
+      message.feedback = rating;
+      ElementPlus.ElMessage.success('感谢反馈');
+    },
     regenerate(i) {
+      this.trackInteraction('regenerate');
       // 找到该回答之前最近的用户提问，重新发送
       for (let j = i - 1; j >= 0; j--) {
         if (this.messages[j].role === 'user') { this.ask(this.messages[j].content); return; }
       }
     },
+    askSuggestion(question) { this.trackInteraction('followup'); this.ask(question); },
     stopGeneration() {
       if (this.abortCtrl) this.abortCtrl.abort();
     },
@@ -544,6 +829,7 @@ const app = createApp({
     async ask(preset) {
       const question = (preset || this.draft).trim();
       if (!question || this.streaming) return;
+      if (!this.chatKb) return ElementPlus.ElMessage.warning('请先选择一个知识库');
       this.draft = '';
       this.streaming = true;
       this.messages.push({ role: 'user', content: question });
@@ -559,7 +845,18 @@ const app = createApp({
           json: { question, conversation_id: this.conversationId, kb_id: this.chatKb || null, mode: this.chatMode },
           signal: this.abortCtrl.signal,
         });
-        if (!res.ok) { bot.content = '请求失败：' + ((await res.json()).detail || res.status); return; }
+        if (!res.ok) {
+          const raw = await res.text();
+          let detail = raw || `HTTP ${res.status}`;
+          let requestId = res.headers.get('X-Request-ID') || '';
+          try {
+            const payload = JSON.parse(raw);
+            detail = payload.detail || detail;
+            requestId = payload.request_id || requestId;
+          } catch { /* 非 JSON 错误正文按纯文本展示 */ }
+          bot.content = `> ⚠️ 请求失败（${res.status}）\n\n${detail}${requestId ? `\n\n请求 ID：${requestId}` : ''}`;
+          return;
+        }
 
         // 手动解析 SSE（POST 流式响应不能用 EventSource）
         const reader = res.body.getReader();
@@ -607,6 +904,10 @@ const app = createApp({
     },
 
     // ---------- 统计 ----------
+    async loadSystemInfo() {
+      const res = await this.api('/api/system/capabilities');
+      if (res.ok) this.systemInfo = await res.json();
+    },
     async loadStats() {
       this.statsLoading = true;
       try {

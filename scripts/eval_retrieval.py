@@ -65,6 +65,8 @@ def evaluate(
     cases: list[dict], client: httpx.Client, headers: dict, profile: str
 ) -> dict:
     hits = 0
+    precision_values = []
+    recall_values = []
     reciprocal_ranks = []
     ndcg_values = []
     false_positive_no_answers = 0
@@ -79,6 +81,11 @@ def evaluate(
         latencies.append(latency_ms)
         if case["answerable"]:
             rank = _first_correct_rank(sources, case)
+            relevant = [source for source in sources[:5] if _relevant(source, case)]
+            precision_values.append(len(relevant) / max(1, min(5, len(sources))))
+            expected_count = max(1, len(set(case.get("expected_documents", []))))
+            found_documents = {source.get("filename") for source in relevant}
+            recall_values.append(min(1.0, len(found_documents) / expected_count))
             hits += int(rank is not None)
             reciprocal_ranks.append(1.0 / rank if rank else 0.0)
             ndcg_values.append(_ndcg(sources, case))
@@ -98,6 +105,8 @@ def evaluate(
         "case_count": len(cases),
         "retrieval_profile": profile,
         "hit_rate_at_5": hits / answerable_count,
+        "precision_at_5": statistics.fmean(precision_values) if precision_values else 0.0,
+        "recall_at_5": statistics.fmean(recall_values) if recall_values else 0.0,
         "mrr": statistics.fmean(reciprocal_ranks) if reciprocal_ranks else 0.0,
         "ndcg_at_5": statistics.fmean(ndcg_values) if ndcg_values else 0.0,
         "no_answer_false_positive_rate": (
@@ -118,7 +127,18 @@ def main() -> int:
     parser.add_argument(
         "--profile",
         default="hybrid",
-        choices=["vector", "hybrid", "hybrid_rerank", "parent_child", "multi_query"],
+        choices=[
+            "auto",
+            "vector",
+            "flat",
+            "keyword",
+            "hybrid",
+            "hybrid_rerank",
+            "parent_child",
+            "multi_query",
+            "hyde",
+            "graph",
+        ],
     )
     args = parser.parse_args()
     cases = [
