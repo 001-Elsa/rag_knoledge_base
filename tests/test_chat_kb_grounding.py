@@ -59,3 +59,43 @@ def test_chunk_source_preserves_knowledge_base_id():
 
     assert source["kb_id"] == "kb-a"
     assert source["content"] == "actual file content"
+
+
+def test_grounded_fallback_only_uses_retrieved_chunks_with_citations():
+    chunks = [
+        SimpleNamespace(
+            document_name="README.md",
+            section="技术栈",
+            content="FastAPI PostgreSQL pgvector Redis Celery",
+        ),
+        SimpleNamespace(
+            document_name="部署.md",
+            section=None,
+            content="Docker Compose 与 OpenTelemetry",
+        ),
+    ]
+
+    answer = chat_router._build_grounded_fallback(chunks)
+
+    assert "直接摘自当前知识库" in answer
+    assert "README.md · 技术栈" in answer
+    assert "FastAPI PostgreSQL pgvector Redis Celery [1]" in answer
+    assert "Docker Compose 与 OpenTelemetry [2]" in answer
+    assert chat_router._has_substantive_answer(answer)
+
+
+def test_citation_only_output_is_not_a_substantive_answer():
+    assert not chat_router._has_substantive_answer("[1][5]")
+    assert not chat_router._has_substantive_answer("## 引用\n[1] [2]")
+
+
+def test_semantic_cache_must_be_substantive_and_scoped_to_selected_kb():
+    grounded = {
+        "answer": "FastAPI 与 PostgreSQL 是项目技术栈。[1]",
+        "sources": [{"kb_id": "kb-a", "content": "evidence"}],
+    }
+
+    assert chat_router._cache_hit_is_grounded(grounded, "kb-a")
+    assert not chat_router._cache_hit_is_grounded({**grounded, "answer": "[1]"}, "kb-a")
+    assert not chat_router._cache_hit_is_grounded(grounded, "kb-b")
+    assert not chat_router._cache_hit_is_grounded({**grounded, "sources": []}, "kb-a")

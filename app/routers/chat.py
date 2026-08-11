@@ -15,6 +15,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -161,6 +162,44 @@ def _scope_chunks_to_kb(chunks: list, kb_id: str) -> list:
     return scoped
 
 
+def _build_grounded_fallback(chunks: list, *, limit: int = 5) -> str:
+    """Build a citation-bound extractive answer without model synthesis."""
+    lines = [
+        "> ⚠️ 大模型暂时不可用。以下内容直接摘自当前知识库的检索结果，未添加文件外信息。",
+        "",
+    ]
+    for index, chunk in enumerate(chunks[:limit], start=1):
+        document_name = (
+            getattr(chunk, "filename", None)
+            or getattr(chunk, "document_name", None)
+            or "知识库文档"
+        )
+        section = getattr(chunk, "section", None)
+        label = f"{document_name} · {section}" if section else document_name
+        excerpt = " ".join(str(getattr(chunk, "content", "")).split())
+        if len(excerpt) > 420:
+            excerpt = excerpt[:419].rstrip() + "…"
+        lines.append(f"- **{label}**：{excerpt} [{index}]")
+    return "\n".join(lines)
+
+
+def _has_substantive_answer(answer: str) -> bool:
+    """Reject citation-only or Markdown-only output as an empty answer."""
+    without_citations = re.sub(r"\[\d+]", "", answer)
+    plain_text = re.sub(r"[#>*_`\-\s]", "", without_citations)
+    return len(plain_text) >= 12
+
+
+def _cache_hit_is_grounded(cache_hit: dict, kb_id: str) -> bool:
+    """Accept cached answers only when content and every source match this KB."""
+    sources = cache_hit.get("sources") or []
+    return (
+        _has_substantive_answer(str(cache_hit.get("answer") or ""))
+        and bool(sources)
+        and all(source.get("kb_id") == kb_id for source in sources)
+    )
+
+
 async def _persist_round(conv_id: str, user_id: str, question: str, answer: str,
                          sources: list[dict], usage: dict, first_token_ms: int, total_ms: int,
                          record_usage: bool = True) -> None:
@@ -277,6 +316,12 @@ async def chat(
     if semantic_cache.is_eligible(history):
         SEMANTIC_CACHE_LOOKUPS.inc()
         cache_hit = await semantic_cache.lookup(user.id, effective_kb_id, query_vec)
+    if cache_hit is not None and not _cache_hit_is_grounded(cache_hit, effective_kb_id):
+        logger.warning(
+            "discarded empty or cross-knowledge-base semantic cache hit",
+            extra={"kb_id": effective_kb_id},
+        )
+        cache_hit = None
     if cache_hit is not None:
         async def cached_stream():
             QA_TOTAL.inc()
@@ -420,8 +465,18 @@ async def chat(
                 elif event["type"] == "usage":
                     usage = event
         except Exception as exc:
-            yield _sse("error", {"message": f"生成失败: {exc}"})
-            return
+            logger.warning(
+                "LLM generation failed; returning tenant-scoped evidence fallback",
+                extra={"kb_id": effective_kb_id, "source_count": len(chunks)},
+                exc_info=True,
+            )
+            if body.response_format == "json":
+                yield _sse("error", {"message": f"生成失败: {exc}"})
+                return
+            fallback = _build_grounded_fallback(chunks)
+            answer_parts = [fallback]
+            # Clear any partial model tokens and replace them with cited evidence.
+            yield _sse("replacement", {"text": fallback})
 
         answer = "".join(answer_parts)
         if body.response_format == "json":
@@ -463,9 +518,19 @@ async def chat(
                 }
             else:
                 CITATION_VALIDATION_FAILURES.inc()
-                persisted_answer = (
-                    "回答未通过引用一致性校验，已阻止展示。请缩小问题范围后重试。"
-                )
+                persisted_answer = _build_grounded_fallback(chunks)
+                validation = {
+                    **validate_citations(persisted_answer, len(sources)),
+                    "fallback": "extractive",
+                    "fallback_reason": "citation_validation_failed",
+                }
+        if not _has_substantive_answer(persisted_answer):
+            persisted_answer = _build_grounded_fallback(chunks)
+            validation = {
+                **validate_citations(persisted_answer, len(sources)),
+                "fallback": "extractive",
+                "fallback_reason": "empty_or_citation_only_answer",
+            }
         yield _sse("validation", validation)
         if persisted_answer != answer:
             yield _sse("replacement", {"text": persisted_answer})
