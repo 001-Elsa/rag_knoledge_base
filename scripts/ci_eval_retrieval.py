@@ -164,6 +164,7 @@ async def _run() -> dict:
                     document_id=document.id,
                     owner_id=owner.id,
                     kb_id=kb.id,
+                    workspace_id=workspace.id,
                     index_version=1,
                     seq=seq,
                     parent_seq=seq,
