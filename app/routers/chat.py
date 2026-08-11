@@ -57,6 +57,7 @@ from app.schemas import (
     MessageOut,
 )
 from app.services import history as history_svc
+from app.services import memory as memory_svc
 from app.services import semantic_cache, summarizer
 from app.services.agent import run_agent
 from app.services.audit import add_audit_event
@@ -571,8 +572,22 @@ async def _agent_stream(user: User, body: ChatRequest, conv_id: str, history: li
         # finishes, so agent tools use a dedicated tenant-bound session.
         async with AsyncSessionLocal() as agent_db:
             await set_tenant_context(agent_db, user.id)
+            memories = await memory_svc.load_agent_memories(
+                agent_db,
+                owner_id=user.id,
+                kb_id=body.kb_id,
+                current_conversation_id=conv_id,
+                question=body.question,
+            )
+            if memories:
+                yield _sse("memory", {"count": len(memories)})
             async for event in run_agent(
-                agent_db, user.id, body.kb_id, body.question, history
+                agent_db,
+                user.id,
+                body.kb_id,
+                body.question,
+                history,
+                long_term_memory=memories,
             ):
                 if event["type"] in ("tool_call", "tool_result"):
                     yield _sse(

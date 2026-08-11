@@ -10,5 +10,7 @@ venv/
 celerybeat-schedule*
 .coverage
 htmlcov/
+pytest-results.xml
+tmp/*.log
 eval/reports/*.json
 !eval/reports/.gitkeep

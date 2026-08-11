@@ -17,6 +17,7 @@ async def test_capabilities_describe_the_real_rag_pipeline():
     assert "Redis + Celery" in technologies
     assert "混合检索" in payload["retrieval"]
     assert "引用来源" in payload["generation"]
+    assert "Agent 跨对话记忆" in payload["generation"]
     assert "Workspace RLS" in payload["security"]
 
 

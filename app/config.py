@@ -73,6 +73,10 @@ class Settings(BaseSettings):
 
     # ---- Agent 模式 ----
     agent_max_steps: int = 4              # 工具调用循环上限，防止死循环烧钱
+    agent_memory_enabled: bool = True     # 跨对话长期记忆（同一用户、同一知识库）
+    agent_memory_candidates: int = 80     # 从历史用户消息中参与排序的候选数
+    agent_memory_max_items: int = 6       # 单次注入 Agent 的记忆条数
+    agent_memory_max_chars: int = 1800    # 单次记忆 Prompt 总字符上限
 
     # ---- 备用模型（多模型容灾）：主模型重试失败/熔断时自动切换，留空则不启用 ----
     llm_fallback_api_key: str = ""

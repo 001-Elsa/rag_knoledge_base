@@ -22,6 +22,7 @@ from app.config import settings
 from app.models import Document, KnowledgeBase, WorkspaceMembership
 from app.services.evidence import apply_injection_policy
 from app.services.llm import chat_completion
+from app.services.memory import build_memory_context
 from app.services.retriever import RetrievedChunk, retrieve
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ async def run_agent(
     kb_id: str | None,
     question: str,
     history: list[dict] | None = None,
+    long_term_memory: list[str] | None = None,
 ) -> AsyncIterator[dict]:
     """执行 Agent 循环，产出事件：
     {"type": "tool_call", "name": ..., "args": {...}}
@@ -76,6 +78,9 @@ async def run_agent(
     {"type": "usage", "prompt_tokens": ..., "completion_tokens": ...}
     """
     messages: list[dict] = [{"role": "system", "content": AGENT_SYSTEM}]
+    memory_context = build_memory_context(long_term_memory or [])
+    if memory_context:
+        messages.append({"role": "system", "content": memory_context})
     if history:
         messages.extend(history)
     messages.append({"role": "user", "content": question})

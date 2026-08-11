@@ -35,6 +35,6 @@ async def capabilities(_user: User = Depends(get_current_user)):
         ],
         "ingestion": ["PDF", "Word", "Excel", "网页", "Markdown", "数据库", "API", "图片与扫描件", "OCR", "表格解析"],
         "retrieval": ["向量检索", "BM25", "混合检索", "HNSW", "RRF", "规则重排", "父子文档", "Multi-Query", "HyDE", "Graph RAG"],
-        "generation": ["多轮改写", "证据阈值", "拒答", "引用来源", "SSE 流式输出", "幻觉与 Prompt Injection 检查"],
+        "generation": ["多轮改写", "Agent 跨对话记忆", "证据阈值", "拒答", "引用来源", "SSE 流式输出", "幻觉与 Prompt Injection 检查"],
         "security": ["JWT 双 Token", "RBAC", "Workspace RLS", "文档与 Chunk 权限", "手机号唯一约束", "审计哈希链", "敏感信息脱敏"],
     }

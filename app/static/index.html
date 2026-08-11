@@ -208,9 +208,10 @@ body { margin: 0; font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", san
               <div class="msg-row" :class="m.role">
                 <div v-if="m.role==='user'" class="bubble user">{{ m.content }}</div>
                 <div v-else style="max-width:82%; min-width:0;">
-                  <div class="meta-line" v-if="m.rewrite || m.cached">
+                  <div class="meta-line" v-if="m.rewrite || m.cached || m.memoryCount">
                     <el-tag v-if="m.cached" size="small" type="success">⚡ 语义缓存命中（相似度 {{ m.cached.similarity }}）</el-tag>
                     <el-tag v-if="m.rewrite" size="small" type="info">实际检索：{{ m.rewrite }}</el-tag>
+                    <el-tag v-if="m.memoryCount" size="small" type="info">🧠 已调用 {{ m.memoryCount }} 条跨对话记忆</el-tag>
                   </div>
                   <div v-if="m.tools && m.tools.length" class="tool-timeline">
                     <div v-for="(t, k) in m.tools" :key="k" class="tool-line">
@@ -834,7 +835,7 @@ const app = createApp({
       this.streaming = true;
       this.messages.push({ role: 'user', content: question });
       const bot = Vue.reactive({ role: 'assistant', content: '', sources: [], suggestions: [], rewrite: null,
-                                 usage: null, cached: null, tools: [], streaming: true });
+                                 usage: null, cached: null, memoryCount: 0, tools: [], streaming: true });
       this.messages.push(bot);
       this.scrollBottom();
       this.abortCtrl = new AbortController();
@@ -876,6 +877,7 @@ const app = createApp({
             switch (ev[1]) {
               case 'cached': bot.cached = data; break;
               case 'rewrite': bot.rewrite = data.query; break;
+              case 'memory': bot.memoryCount = data.count; break;
               case 'tool_call': bot.tools.push({ kind: 'call', name: data.name, args: data.args }); this.scrollBottom(); break;
               case 'tool_result': bot.tools.push({ kind: 'result', name: data.name, summary: data.summary }); this.scrollBottom(); break;
                 case 'sources': bot.sources = data; break;

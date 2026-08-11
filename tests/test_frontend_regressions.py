@@ -66,3 +66,10 @@ def test_chat_kb_switch_starts_a_fresh_conversation():
 
     assert "this.newChat()" in handler
     assert "已切换知识库，并为你开启新对话" in handler
+
+
+def test_agent_memory_usage_is_visible_in_chat():
+    html = INDEX_HTML.read_text(encoding="utf-8")
+
+    assert "🧠 已调用 {{ m.memoryCount }} 条跨对话记忆" in html
+    assert "case 'memory': bot.memoryCount = data.count" in html
