@@ -30,6 +30,7 @@ from app.models import (
 )
 from app.security import hash_password
 from app.services.object_storage import get_object_storage
+from app.services.parser import ParsedSegment
 from app.services.resource_cleanup import delete_document, delete_knowledge_base
 from app.tasks import ingest as ingest_tasks
 from app.tasks import maintenance as maintenance_tasks
@@ -157,6 +158,7 @@ def test_index_activation_failure_leaves_old_version_queryable(tmp_path, monkeyp
                     document_id=document.id,
                     owner_id=owner.id,
                     kb_id=kb.id,
+                    workspace_id=kb.workspace_id,
                     index_version=1,
                     seq=0,
                     parent_seq=0,
@@ -171,7 +173,9 @@ def test_index_activation_failure_leaves_old_version_queryable(tmp_path, monkeyp
 
     document_id, organization_id, owner_ids, _kb_id = asyncio.run(prepare())
     monkeypatch.setattr(
-        ingest_tasks, "parse_file", lambda _: [("new content for v2", 1)]
+        ingest_tasks,
+        "parse_document",
+        lambda *_args, **_kwargs: [ParsedSegment("new content for v2", 1)],
     )
 
     def boom(_texts):
@@ -334,6 +338,7 @@ def test_reranker_failure_falls_back_to_rrf(tmp_path, monkeypatch):
                     document_id=document.id,
                     owner_id=owner.id,
                     kb_id=kb.id,
+                    workspace_id=kb.workspace_id,
                     index_version=1,
                     seq=0,
                     parent_seq=0,
@@ -477,6 +482,7 @@ def test_redis_unavailable_retrieval_degraded(tmp_path, monkeypatch):
                     document_id=document.id,
                     owner_id=owner.id,
                     kb_id=kb.id,
+                    workspace_id=kb.workspace_id,
                     index_version=1,
                     seq=0,
                     parent_seq=0,
@@ -554,11 +560,15 @@ def test_embedding_partial_checkpoint_resume(tmp_path, monkeypatch):
             raise RuntimeError("worker killed during second embedding batch")
         return [[0.01] * settings.embedding_dim for _ in texts]
 
-    monkeypatch.setattr(ingest_tasks, "parse_file", lambda _: [
-        ("第一段内容。", 1),
-        ("第二段内容。", 2),
-        ("第三段内容。", 3),
-    ])
+    monkeypatch.setattr(
+        ingest_tasks,
+        "parse_document",
+        lambda *_args, **_kwargs: [
+            ParsedSegment("第一段内容。", 1),
+            ParsedSegment("第二段内容。", 2),
+            ParsedSegment("第三段内容。", 3),
+        ],
+    )
     # Force small batch size so embedding splits across 3 batches.
     monkeypatch.setattr(settings, "ingestion_embed_batch_size", 1)
     monkeypatch.setattr(ingest_tasks, "embed_documents", crash_on_second_batch)
@@ -841,6 +851,7 @@ def test_sse_chat_streaming_end_to_end(monkeypatch):
                     document_id=document.id,
                     owner_id=owner.id,
                     kb_id=kb.id,
+                    workspace_id=kb.workspace_id,
                     index_version=1,
                     seq=0,
                     parent_seq=0,
@@ -945,8 +956,8 @@ def test_outbox_worker_full_chain_idempotent_delivery(tmp_path, monkeypatch):
     # Step 2: worker (run directly) ingests the document.
     monkeypatch.setattr(
         ingest_tasks,
-        "parse_file",
-        lambda _: [("端到端测试内容。", 1)],
+        "parse_document",
+        lambda *_args, **_kwargs: [ParsedSegment("端到端测试内容。", 1)],
     )
     monkeypatch.setattr(
         ingest_tasks,

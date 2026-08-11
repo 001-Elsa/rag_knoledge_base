@@ -33,6 +33,7 @@ from app.models import (
 )
 from app.security import hash_password
 from app.services import semantic_cache
+from app.services.parser import ParsedSegment
 from app.services.permissions import get_kb_with_permission
 from app.services.resource_cleanup import delete_knowledge_base
 from app.services.retriever import retrieve
@@ -286,8 +287,10 @@ def test_ingestion_version_switch_and_duplicate_delivery(tmp_path, monkeypatch):
     document_id, organization_id, owner_ids = asyncio.run(prepare())
     monkeypatch.setattr(
         ingest_tasks,
-        "parse_file",
-        lambda _: [("The return period is seven days.", 1)],
+        "parse_document",
+        lambda *_args, **_kwargs: [
+            ParsedSegment("The return period is seven days.", 1)
+        ],
     )
     monkeypatch.setattr(
         ingest_tasks,
@@ -459,6 +462,7 @@ def test_fixed_hybrid_retrieval_regression_fixture(tmp_path):
                         document_id=document.id,
                         owner_id=owner.id,
                         kb_id=kb.id,
+                        workspace_id=kb.workspace_id,
                         index_version=1,
                         seq=0,
                         parent_seq=0,
@@ -471,6 +475,7 @@ def test_fixed_hybrid_retrieval_regression_fixture(tmp_path):
                         document_id=document.id,
                         owner_id=owner.id,
                         kb_id=kb.id,
+                        workspace_id=kb.workspace_id,
                         index_version=1,
                         seq=1,
                         parent_seq=1,
@@ -500,6 +505,7 @@ def test_fixed_hybrid_retrieval_regression_fixture(tmp_path):
                     document_id=deleting_document.id,
                     owner_id=owner.id,
                     kb_id=kb.id,
+                    workspace_id=kb.workspace_id,
                     index_version=1,
                     seq=0,
                     parent_seq=0,
